@@ -42,13 +42,20 @@ The initial "stale broker credential" reading was wrong. Verified facts:
 - The broker's HTTP surface (`/v1/chat/completions`, `/v1/messages`,
   `/v1/credential` write-only) is a **model gateway**, not a key vault; there
   is no credential *pull* route for external clients.
-- The `omp` launcher re-execs the **openmythos 16.3.6 build**
-  (`/Volumes/Storage/openmythos-build/oh-my-pi-v16.3.6-openmythos/…`), so any
-  broker involvement puts openmythos-build code in the credential/model path.
-- Douglas ruled: openmythos must not be involved in this harness.
+- The `omp` launcher **currently on PATH** re-execs the openmythos 16.3.6 build
+  (`/Volumes/Storage/openmythos-build/oh-my-pi-v16.3.6-openmythos/…`, verified
+  from the live process command line). Douglas confirms independent
+  non-openmythos omp builds exist on this machine and are in regular use; only
+  the PATH launcher chain lands in the openmythos build.
+- Douglas ruled: openmythos must not be involved in this harness. He later
+  refreshed the broker's zai entry himself (the key was valid all along — the
+  "stale credential" reading was an artifact of `token <provider>` printing the
+  bearer).
 
-Decision: Floyd Core sources the GLM key from the user's opencode config only,
+Decision: Floyd Core sources the GLM key from the user's opencode config,
 validates it against the coding endpoint before spawn, and fails closed. The
-omp spawn was deleted from `engine.ts`. Additional footgun recorded: invoking
-`omp` corrupts the calling shell's PATH (post-invocation `command not found`
-for curl/head/python3 observed repeatedly).
+omp spawn was deleted from `engine.ts`. If broker sourcing is wanted later, it
+must reference an explicit non-openmythos binary path (never PATH `omp`) and a
+real credential-pull interface. Additional footgun recorded: invoking `omp`
+corrupts the calling shell's PATH (post-invocation `command not found` for
+curl/head/python3 observed repeatedly).
