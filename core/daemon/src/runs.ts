@@ -120,11 +120,12 @@ async function runEngineTask(
     promptText: string;
     policy: PermissionPolicy;
     existingSessionId?: string | null;
+    engineAgent?: string;
   },
 ): Promise<{ sessionID: string; transcript: unknown }> {
   let sessionID = opts.existingSessionId ?? null;
   if (!sessionID) {
-    sessionID = await engine.createSession(opts.directory, PROVIDER_ID, opts.model);
+    sessionID = await engine.createSession(opts.directory, PROVIDER_ID, opts.model, opts.engineAgent);
     // persist BEFORE prompting: restart between these two steps must not re-create work
     setJob(db, opts.jobId, { engine_session_id: sessionID });
     appendEvidence(db, "engine.session.created", "floyd-core", { engine: "opencode", sessionID, directory: opts.directory }, {
@@ -336,7 +337,19 @@ export async function executeRun(db: Db, engine: OpenCodeEngine, runId: string):
     promptText: reviewerPrompt,
     policy: reviewerSpec.policy,
     existingSessionId: reviewer.engine_session_id,
+    // engine-level enforcement: floyd-reviewer agent has write/edit/bash/patch
+    // disabled (1.17.15 ignores the `permission` config field — see ADR-001;
+    // tool disabling is the mechanism that actually compiles in)
+    engineAgent: "floyd-reviewer",
   });
+  // defense in depth: a reviewer must leave its worktree untouched
+  const reviewerDiff = worktreeDiff(reviewWorktree, baseSha);
+  if (reviewerDiff.trim().length > 0) {
+    const mutArt = putArtifact(db, reviewerDiff, "text/x-diff", "ILLEGAL reviewer mutation");
+    appendEvidence(db, "review.mutation_detected", "floyd-core", { artifact: mutArt, bytes: reviewerDiff.length }, { run_id: runId, job_id: reviewer.id });
+    setJob(db, reviewer.id, { status: "failed", result_json: JSON.stringify({ error: "reviewer mutated its worktree", artifact: mutArt }) });
+    throw new Error(`reviewer ${reviewer.id} mutated its worktree — review invalidated (diff ${reviewerDiff.length} bytes)`);
+  }
   const reviewArt = putArtifact(db, JSON.stringify(revRes.transcript, null, 2), "application/json", "review transcript");
   linkRunArtifact(db, runId, reviewer.id, reviewArt, "review");
   appendEvidence(db, "review.completed", "floyd-core", { artifact: reviewArt, sessionID: revRes.sessionID }, { run_id: runId, job_id: reviewer.id });

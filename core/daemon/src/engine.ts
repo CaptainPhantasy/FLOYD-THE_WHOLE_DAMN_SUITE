@@ -157,10 +157,11 @@ export class OpenCodeEngine {
     return json;
   }
 
-  async createSession(directory: string, providerID: string, modelID: string): Promise<string> {
+  async createSession(directory: string, providerID: string, modelID: string, agent?: string): Promise<string> {
     const res = (await this.api("POST", "/api/session", {
       location: { directory },
       model: { providerID, id: modelID },
+      ...(agent ? { agent } : {}),
     })) as { id: string };
     if (!res.id) throw new Error("engine session create returned no id");
     return res.id;

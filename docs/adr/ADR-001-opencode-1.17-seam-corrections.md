@@ -67,3 +67,35 @@ GLM plan usage registered for the golden-path window (5-hour token quota at
 marginal cost, no PAYG. Additional footgun recorded: invoking `omp` corrupts
 the calling shell's PATH (post-invocation `command not found` observed
 repeatedly).
+
+## Permission root cause (resolved 2026-07-12, live-verified)
+
+**Why no permission asks fired during golden-path runs:** 1.17.15 compiles a
+PermissionV2 ruleset per agent and **ignores the `permission` config field
+entirely** — both the global shape and `agent.<name>.permission` are accepted
+by the schema, echoed by `/config`, and never mapped into the compiled rules
+(verified: `agent.build.permission = {edit:ask,bash:ask}` produced an identical
+13-rule compiled set). The effective built-in policy is last-match-wins over a
+base `{*,*,allow}`: inside the session directory everything is allowed;
+`external_directory` asks; `.env`/`.env.*` reads ask.
+
+**The ask/reply machinery itself works in server mode** (contrary to the
+earlier gap note): a write outside the session directory fired
+`action:external_directory` within 10s, and replying `reject` via
+`POST /api/session/{id}/permission/{requestID}/reply` blocked the write
+(file verified absent). Floyd's poll-and-reply gate is therefore fully
+functional for boundary crossings — and the engine's session-directory
+boundary coincides exactly with Floyd's worktree lease.
+
+**Enforcement that actually compiles: per-agent tool disabling.** A custom
+`floyd-reviewer` agent (`tools: {write:false, edit:false, bash:false,
+patch:false, multiedit:false}`) was added to the engine config; reviewer
+sessions are created with `agent: "floyd-reviewer"`. Adversarial live test: the
+model attempted write, bash, apply_patch, and edit — every execution failed at
+the engine and no file was created. Defense in depth added in Core: after
+review, the reviewer worktree diff must be empty or the review job fails with
+`review.mutation_detected` evidence.
+
+**Upstream gap report item:** `permission` config field is a silent no-op in
+1.17.15 server mode — dangerous because `/config` echoes the intent while the
+compiled policy stays allow-all inside the session directory.
