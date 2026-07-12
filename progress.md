@@ -224,3 +224,8 @@
 - tests/acceptance/objective1.py: all 5 sub-tests PASS (exit 0) on run_mrhwuoeo048dbb2e4596 — five event types streamed (2688 sequenced events), mid-run steer reflected in diff, question answered via channel (scale chosen), permission granted from surface (external note written after grant), Last-Event-ID replay from seq 1345 returned 1343 frames in order.
 - Permission semantics upgraded: AgentSpec-listed kinds auto-decided by Core; unlisted kinds stay pending for surfaces (policy.pending_surface_decision → surface policy.decision). Human-in-the-loop verified live.
 - docs/session-contract.md (Objective 2.2) written. Cockpit + CLI now consume the channel as primary. 27/27 unit tests, tsc clean.
+
+### Objectives 2-4 progress (2026-07-12)
+- Objective 3 COMPLETE: memory injection (memory.injected, block in live prompt) + versioned skills registry (skills.ts, TDD 5 tests, 2 seeded skills code-review@1.0.0/tdd-loop@1.0.0) with on-demand @skill loading (skill.loaded receipt in run_mrhxi4r5); roadmap reordered Skills&Memory before PTY (deferred).
+- Objective 4 CI sub-tests COMPLETE: com.floyd.core.plist PASS 10/10 (launchd_plist_test.py); launchd Core running pid 85295 exit 0; CLI run executed against it with exactly one Core process; CLI attaches never spawns. FOOTGUN: launchd EX_CONFIG(78) when stdio redirects to external volume — logs moved to ~/Library/Logs/floyd. Reboot survival = manual operator item (docs/RELEASE-CHECKLIST.md).
+- Objective 2: on-attach pending-ask snapshot added for cross-surface continuity (a surface joining after an ask fired still sees open questions/permissions). Parity test iterating.

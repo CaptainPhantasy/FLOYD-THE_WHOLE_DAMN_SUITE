@@ -23,8 +23,8 @@
   <key>RunAtLoad</key>
   <true/>
   <key>StandardOutPath</key>
-  <string>/Volumes/Storage/FLOYD_RUNTIME/core/core.log</string>
+  <string>/Users/douglastalley/Library/Logs/floyd/core.out.log</string>
   <key>StandardErrorPath</key>
-  <string>/Volumes/Storage/FLOYD_RUNTIME/core/core.err.log</string>
+  <string>/Users/douglastalley/Library/Logs/floyd/core.err.log</string>
 </dict>
 </plist>

@@ -32,7 +32,7 @@ capabilities stay visibly unavailable until their provider passes e2e.
 
 ### P4: Identity, continuity, and daemon lifecycle
 
-- [ ] launchd-managed Floyd Core (`com.floyd.core`, KeepAlive) — surfaces always find the daemon; CLI stays attach-only.
+- [x] launchd-managed Floyd Core (`com.floyd.core`, KeepAlive) — RUNNING pid 85295; CLI attach-only verified.
 - [ ] Actor/Device rows + device-scoped gateway tokens (replace the single shared token).
 - [ ] Session continuity acceptance test: start in CLI, attach mid-run in Cockpit, decide from either.
 
@@ -121,6 +121,6 @@ capabilities stay visibly unavailable until their provider passes e2e.
 
 ### Objective 4 — Floyd Core under launchd
 
-- [ ] `com.floyd.core.plist` (Label/KeepAlive/RunAtLoad/exec path/log paths per auth-broker pattern).
-- [ ] Loaded via launchctl; `launchctl list` shows running; exactly one Core process during runs; CLI attaches, never spawns.
-- [ ] Reboot survival: manual operator checklist item (not CI); record in release checklist.
+- [x] `com.floyd.core.plist` — RECEIPT: launchd_plist_test.py PASS 10/10; logs to ~/Library/Logs/floyd (external-volume stdio = EX_CONFIG footgun, recorded).
+- [x] Loaded via launchctl bootstrap — RECEIPT: running pid 85295 exit 0; CLI run executed, exactly one Core (before=1 after=1); CLI attaches not spawns.
+- [x] Reboot survival: recorded as operator item in docs/RELEASE-CHECKLIST.md (manual, pending physical reboot).
