@@ -42,20 +42,28 @@ The initial "stale broker credential" reading was wrong. Verified facts:
 - The broker's HTTP surface (`/v1/chat/completions`, `/v1/messages`,
   `/v1/credential` write-only) is a **model gateway**, not a key vault; there
   is no credential *pull* route for external clients.
-- The `omp` launcher **currently on PATH** re-execs the openmythos 16.3.6 build
-  (`/Volumes/Storage/openmythos-build/oh-my-pi-v16.3.6-openmythos/…`, verified
-  from the live process command line). Douglas confirms independent
-  non-openmythos omp builds exist on this machine and are in regular use; only
-  the PATH launcher chain lands in the openmythos build.
-- Douglas ruled: openmythos must not be involved in this harness. He later
-  refreshed the broker's zai entry himself (the key was valid all along — the
-  "stale credential" reading was an artifact of `token <provider>` printing the
-  bearer).
+- CORRECTION (verified): the PATH `omp` binary is genuinely independent — zero
+  embedded `openmythos-build` references. The openmythos process on 17384 is
+  owned by **launchd**: `~/Library/LaunchAgents/com.omp.auth-broker.plist`
+  (`KeepAlive=true`, `RunAtLoad=true`) runs the openmythos 16.3.6 dist binary
+  by absolute path and instantly respawns it when killed. Any `serve` started
+  by hand loses the port race to launchd.
+- Douglas ruled: openmythos must not be involved in this harness; independent
+  non-openmythos omp builds exist and are in regular use. He refreshed the
+  broker's zai entry himself (broker DB row 48 validated HTTP 200 at the coding
+  endpoint; the "stale credential" reading was an artifact of
+  `token <provider>` printing the broker bearer, not the stored key).
+- Vendor-supported credential path: z.ai's `coding-helper` (`chelper`) manages
+  the GLM Coding Plan key and writes/reloads it into coding tools including
+  OpenCode (`chelper auth reload opencode`); `chelper doctor` reports API key,
+  plan, and OpenCode wiring healthy.
 
-Decision: Floyd Core sources the GLM key from the user's opencode config,
-validates it against the coding endpoint before spawn, and fails closed. The
-omp spawn was deleted from `engine.ts`. If broker sourcing is wanted later, it
-must reference an explicit non-openmythos binary path (never PATH `omp`) and a
-real credential-pull interface. Additional footgun recorded: invoking `omp`
-corrupts the calling shell's PATH (post-invocation `command not found` for
-curl/head/python3 observed repeatedly).
+Decision: Floyd Core sources the GLM key from the opencode config that
+`coding-helper` maintains, validates it against the coding endpoint before
+every spawn, and fails closed. The omp spawn was deleted from `engine.ts`; no
+openmythos process is in Floyd's credential or model path. Billing verified:
+GLM plan usage registered for the golden-path window (5-hour token quota at
+4%, plan level max) while the OpenCode credit balance was untouched — zero
+marginal cost, no PAYG. Additional footgun recorded: invoking `omp` corrupts
+the calling shell's PATH (post-invocation `command not found` observed
+repeatedly).
