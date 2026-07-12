@@ -146,8 +146,9 @@ it is never rendered as working.
 - No legacy mutations, symlinks, hardlinks, or in-place migrations.
 - No public endpoint, public MCP, ngrok route, remote repository, GitHub
   visibility change, or credential rotation without Douglas's direct authority.
-- No model call until the route receipt is rendered and the user-approved GLM
-  subscription route is confirmed in the implementation surface.
+- GLM Coding Plan is the approved model route for this golden path. Before its
+  first call, record the route receipt in evidence; every other provider route
+  remains a hard stop until explicitly approved.
 - No fake health checks, empty skills, placeholder agents, or mock media cards
   presented as capabilities.
 - No completion claim without actual command output and cross-surface proof.
