@@ -286,4 +286,9 @@ export class OpenCodeEngine {
   async replyQuestion(sessionID: string, requestID: string, answers: string[][]): Promise<void> {
     await this.api("POST", `/api/session/${sessionID}/question/${requestID}/reply`, { answers });
   }
+
+  async pendingQuestions(sessionID: string): Promise<Array<Record<string, unknown>>> {
+    const res = (await this.api("GET", `/api/session/${sessionID}/question`)) as Array<Record<string, unknown>> | null;
+    return Array.isArray(res) ? res : [];
+  }
 }

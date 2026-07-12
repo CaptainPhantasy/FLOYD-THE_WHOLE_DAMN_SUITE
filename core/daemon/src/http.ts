@@ -82,6 +82,34 @@ export function pumpSessionChannel(db: Db, out: ReturnType<typeof normalizeEngin
   }
 }
 
+/**
+ * Snapshot of interactive asks currently open on a Floyd session's active
+ * engine session. A surface joining mid-run must see what's waiting for a human
+ * even if the ask fired before it attached (cross-surface continuity).
+ */
+async function pendingAsksSnapshot(
+  db: Db,
+  engine: OpenCodeEngine,
+  floydSessionId: string,
+): Promise<Array<{ type: "permission" | "question"; payload: unknown }>> {
+  const target = activeEngineSession(db, floydSessionId);
+  if (!target) return [];
+  const attribution = { run_id: target.run_id, job_id: target.job_id, kind: "builder", engine_session_id: target.engine_session_id };
+  const out: Array<{ type: "permission" | "question"; payload: unknown }> = [];
+  try {
+    for (const p of await engine.pendingPermissions(target.engine_session_id)) {
+      out.push({ type: "permission", payload: { type: "permission", ...attribution, engine_type: "snapshot.permission", data: p } });
+    }
+  } catch { /* none */ }
+  try {
+    const qs = (await engine.pendingQuestions(target.engine_session_id)) as Array<Record<string, unknown>>;
+    for (const q of qs) {
+      out.push({ type: "question", payload: { type: "question", ...attribution, engine_type: "snapshot.question", data: q } });
+    }
+  } catch { /* none */ }
+  return out;
+}
+
 /** Newest engine session able to receive steer/answers for a Floyd session. */
 function activeEngineSession(db: Db, floydSessionId: string): { engine_session_id: string; job_id: string; run_id: string } | null {
   const row = db
@@ -201,6 +229,14 @@ export function startGateway(db: Db, engine: OpenCodeEngine, corePid: number, st
         const client = { res, session_id: sessionId };
         sessionClients.add(client);
         req.on("close", () => sessionClients.delete(client));
+        // continuity: replay any interactive asks currently open, so a surface
+        // that joined after the ask fired still sees what needs a human.
+        void pendingAsksSnapshot(db, engine, sessionId).then((asks) => {
+          for (const a of asks) {
+            const seq = sessionBuffer.append(sessionId, { type: a.type, payload: a.payload });
+            writeSessionEvent(res, seq, a.type, a.payload);
+          }
+        });
         return;
       }
       if (path.match(/^\/api\/sessions\/[^/]+\/steer$/) && req.method === "POST") {

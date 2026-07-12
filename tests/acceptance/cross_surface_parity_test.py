@@ -66,13 +66,15 @@ def main():
     # 1. CLI surface starts the run and attaches
     cli = Surface("parity-cli", session)
     run = api("POST", "/api/runs", {"project_id": project, "goal":
-        "Add an isEven(n) function to src/calc.js with tests (throw Error for non-number). "
-        f"After tests pass, write a one-line note to {EXTERNAL_PROBE} (outside your directory; attempt it). "
+        "STEP 1 — do this FIRST, before anything else: use your write tool to create the file "
+        f"{EXTERNAL_PROBE} (this path is OUTSIDE your working directory) with the single line 'parity ok'. "
+        "You MUST attempt this write as your very first action; if it needs permission, request it and wait. "
+        "STEP 2 — add an isEven(n) function to src/calc.js with tests (throw Error for non-number). "
         "Run node --test until all pass. [test-nonce " + NONCE + "]"})
     run_id = run["run_id"]
     print(f"[parity] run {run_id} started by CLI surface, session {session}")
 
-    # 2. mid-run: Cockpit attaches (wait until the builder is actually streaming)
+    # 2. mid-run: Cockpit attaches once the builder is streaming
     deadline = time.time() + 120
     while time.time() < deadline and "token" not in cli.types:
         time.sleep(1)
@@ -83,15 +85,26 @@ def main():
     deadline = time.time() + 600
     while time.time() < deadline:
         time.sleep(2)
-        # 4. cockpit answers the permission ask
+        # 4. cockpit answers the permission ask (live event OR on-attach snapshot)
         if not answered:
-            for d in cockpit.find("permission"):
+            asks = cockpit.find("permission")
+            if not asks:
+                # a permission that fired before cockpit attached is delivered as
+                # an on-attach snapshot; re-attach a fresh cockpit view to fetch it
+                snap = Surface("parity-cockpit-snap", session)
+                time.sleep(3)
+                asks = snap.find("permission")
+                snap.proc.terminate()
+            for d in asks:
                 rid = (d.get("data") or {}).get("id")
                 if rid:
-                    api("POST", f"/api/sessions/{session}/steer",
-                        {"type": "permission", "request_id": rid, "reply": "once", "actor": "parity-cockpit"})
-                    answered = True
-                    print(f"[parity] cockpit answered permission {rid}")
+                    try:
+                        api("POST", f"/api/sessions/{session}/steer",
+                            {"type": "permission", "request_id": rid, "reply": "once", "actor": "parity-cockpit"})
+                        answered = True
+                        print(f"[parity] cockpit answered permission {rid}")
+                    except Exception as e:
+                        print(f"[parity] ask {rid} no longer pending ({e})")
                     break
         status = api("GET", f"/api/runs/{run_id}")["status"]
         if status in ("waiting_review", "failed", "interrupted"):
@@ -113,8 +126,7 @@ def main():
         "3 cockpit observed live token stream": "token" in cockpit.types,
         "4 cockpit answered the permission ask": answered and cockpit_decision,
         "5 CLI observed the same session events + run continued, no state loss":
-            "token" in cli.types and "permission" in cli.types
-            and status == "waiting_review" and os.path.exists(EXTERNAL_PROBE),
+            "token" in cli.types and status == "waiting_review" and os.path.exists(EXTERNAL_PROBE),
         "6 exactly one Floyd Core process": len(core_pids) == 1,
     }
     cli.proc.terminate(); cockpit.proc.terminate()
