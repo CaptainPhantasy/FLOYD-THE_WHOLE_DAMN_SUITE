@@ -281,4 +281,9 @@ export class OpenCodeEngine {
   async messages(sessionID: string): Promise<unknown> {
     return this.api("GET", `/api/session/${sessionID}/message`);
   }
+
+  /** Answer a question request: answers = one array of selected labels per question. */
+  async replyQuestion(sessionID: string, requestID: string, answers: string[][]): Promise<void> {
+    await this.api("POST", `/api/session/${sessionID}/question/${requestID}/reply`, { answers });
+  }
 }

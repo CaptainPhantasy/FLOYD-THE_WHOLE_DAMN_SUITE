@@ -10,6 +10,7 @@ import { createRun, executeRun, decideRun, getRunDetail, readRunArtifact } from 
 import { getArtifact } from "./artifacts.ts";
 import { recallMemory } from "./memory.ts";
 import { normalizeEngineEvent, type SessionMap } from "./live-channel.ts";
+import { classifyEngineEvent, SessionBuffer } from "./session-channel.ts";
 
 const COCKPIT_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "apps", "cockpit", "public");
 
@@ -37,12 +38,72 @@ export function loadSessionMap(db: Db): SessionMap {
   return map;
 }
 
+// ---------- bidirectional session channel (Objective 1) ----------
+
+const sessionBuffer = new SessionBuffer(5000);
+type SessionSseClient = { res: ServerResponse; session_id: string };
+const sessionClients = new Set<SessionSseClient>();
+
+function floydSessionOfRun(db: Db, runId: string): string | null {
+  const r = db.prepare(`SELECT session_id FROM runs WHERE id = ?`).get(runId) as Record<string, unknown> | undefined;
+  return r ? String(r.session_id) : null;
+}
+
+function writeSessionEvent(res: ServerResponse, seq: number, type: string, payload: unknown): boolean {
+  try {
+    res.write(`id: ${seq}\nevent: ${type}\ndata: ${JSON.stringify(payload)}\n\n`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Classify + sequence + fan out one attributed engine event to session subscribers. */
+export function pumpSessionChannel(db: Db, out: ReturnType<typeof normalizeEngineEvent>): void {
+  if (!out) return;
+  const cls = classifyEngineEvent(out.type, out.properties);
+  if (!cls) return;
+  const floydSession = floydSessionOfRun(db, out.run_id);
+  if (!floydSession) return;
+  const payload = {
+    type: cls.type,
+    channel: cls.channel,
+    run_id: out.run_id,
+    job_id: out.job_id,
+    kind: out.kind,
+    engine_session_id: out.engine_session_id,
+    engine_type: out.type,
+    data: out.properties,
+  };
+  const seq = sessionBuffer.append(floydSession, { type: cls.type, payload });
+  for (const c of sessionClients) {
+    if (c.session_id !== floydSession) continue;
+    if (!writeSessionEvent(c.res, seq, cls.type, payload)) sessionClients.delete(c);
+  }
+}
+
+/** Newest engine session able to receive steer/answers for a Floyd session. */
+function activeEngineSession(db: Db, floydSessionId: string): { engine_session_id: string; job_id: string; run_id: string } | null {
+  const row = db
+    .prepare(
+      `SELECT j.engine_session_id, j.id AS job_id, j.run_id FROM jobs j
+       JOIN runs r ON r.id = j.run_id
+       WHERE r.session_id = ? AND j.engine_session_id IS NOT NULL
+       ORDER BY j.updated_at DESC LIMIT 1`,
+    )
+    .get(floydSessionId) as Record<string, unknown> | undefined;
+  return row
+    ? { engine_session_id: String(row.engine_session_id), job_id: String(row.job_id), run_id: String(row.run_id) }
+    : null;
+}
+
 /** Wire the engine's /event stream into Floyd-attributed SSE broadcasts. */
 export function startLiveChannel(db: Db, engine: OpenCodeEngine): { stop: () => void } {
   return engine.subscribeEvents((evt) => {
     const out = normalizeEngineEvent(evt, loadSessionMap(db));
     if (!out) return;
     broadcast("engine", out, out.run_id);
+    pumpSessionChannel(db, out);
     if (out.is_permission_ask) {
       appendEvidence(db, "engine.permission_ask_observed", "floyd-core", { event: out.type, properties: out.properties }, {
         run_id: out.run_id,
@@ -109,6 +170,72 @@ export function startGateway(db: Db, engine: OpenCodeEngine, corePid: number, st
       if (path === "/api/evidence") {
         const run_id = url.searchParams.get("run_id") ?? undefined;
         return send(res, 200, { events: listEvidence(db, { run_id, limit: 500 }) });
+      }
+      // ---------- bidirectional session channel (Objective 1) ----------
+      if (path.match(/^\/api\/sessions\/[^/]+\/(events|attach)$/)) {
+        const sessionId = path.split("/")[3] ?? "";
+        const isAttach = path.endsWith("/attach");
+        if (isAttach && req.method !== "POST") return send(res, 405, { error: "attach is POST" });
+        if (!isAttach && req.method !== "GET") return send(res, 405, { error: "events is GET" });
+        if (!db.prepare(`SELECT id FROM sessions WHERE id = ?`).get(sessionId)) {
+          return send(res, 404, { error: "no such session" });
+        }
+        let actor = "anonymous";
+        if (isAttach) {
+          const body = (await readBody(req).catch(() => ({}))) as { actor?: string };
+          actor = body.actor ?? "anonymous";
+          appendEvidence(db, "session.participant_attached", actor, { transport: "sse" }, { session_id: sessionId });
+        }
+        const lastRaw = req.headers["last-event-id"] ?? url.searchParams.get("lastEventId") ?? "0";
+        const lastSeq = Number(Array.isArray(lastRaw) ? lastRaw[0] : lastRaw) || 0;
+        res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
+        res.write(`event: hello\ndata: ${JSON.stringify({ session_id: sessionId, last_seq: sessionBuffer.lastSeq(sessionId), replay_from: lastSeq })}\n\n`);
+        for (const e of sessionBuffer.since(sessionId, lastSeq)) {
+          const rec = e.event as { type: string; payload: unknown };
+          if (!writeSessionEvent(res, e.seq, rec.type, rec.payload)) break;
+        }
+        const client = { res, session_id: sessionId };
+        sessionClients.add(client);
+        req.on("close", () => sessionClients.delete(client));
+        return;
+      }
+      if (path.match(/^\/api\/sessions\/[^/]+\/steer$/) && req.method === "POST") {
+        const sessionId = path.split("/")[3] ?? "";
+        const body = (await readBody(req)) as {
+          type?: "steer" | "answer" | "permission";
+          text?: string;
+          request_id?: string;
+          answers?: string[][];
+          reply?: "once" | "always" | "reject";
+          actor?: string;
+        };
+        const target = activeEngineSession(db, sessionId);
+        if (!target) return send(res, 409, { error: "session has no engine session to receive input" });
+        const actor = body.actor ?? "anonymous";
+        if (body.type === "steer") {
+          if (!body.text) return send(res, 400, { error: "text required for steer" });
+          await engine.steer(target.engine_session_id, body.text);
+          appendEvidence(db, "engine.steer.submitted", actor, { chars: body.text.length, text: body.text.slice(0, 500) }, {
+            session_id: sessionId, run_id: target.run_id, job_id: target.job_id,
+          });
+        } else if (body.type === "answer") {
+          if (!body.request_id) return send(res, 400, { error: "request_id required for answer" });
+          const answers = body.answers ?? (body.text ? [[body.text]] : null);
+          if (!answers) return send(res, 400, { error: "answers or text required" });
+          await engine.replyQuestion(target.engine_session_id, body.request_id, answers);
+          appendEvidence(db, "engine.question.answered", actor, { request_id: body.request_id }, {
+            session_id: sessionId, run_id: target.run_id, job_id: target.job_id,
+          });
+        } else if (body.type === "permission") {
+          if (!body.request_id || !body.reply) return send(res, 400, { error: "request_id and reply required" });
+          await engine.replyPermission(target.engine_session_id, body.request_id, body.reply);
+          appendEvidence(db, "policy.decision", actor, { request_id: body.request_id, decision: body.reply, source: "surface" }, {
+            session_id: sessionId, run_id: target.run_id, job_id: target.job_id,
+          });
+        } else {
+          return send(res, 400, { error: "type must be steer | answer | permission" });
+        }
+        return send(res, 202, { session_id: sessionId, type: body.type, delivered_to: target.engine_session_id });
       }
       if (path.match(/^\/api\/runs\/[^/]+\/stream$/) && req.method === "GET") {
         const runId = path.split("/")[3] ?? "";

@@ -92,8 +92,13 @@ async function gatePermissions(
             ? `kind ${kind} allowed inside leased worktree ${worktree}`
             : `kind ${kind} allowed by spec`;
         } else {
-          decision = "reject";
-          reason = `kind ${kind} not in allowlist — default deny`;
+          // Unlisted kinds stay PENDING for a human on any attached surface
+          // (session channel emits a `permission` event; steer endpoint answers).
+          appendEvidence(db, "policy.pending_surface_decision", "floyd-core", { request_id: reqId, kind }, {
+            run_id: scope.run_id,
+            job_id: scope.job_id,
+          });
+          continue;
         }
         await engine.replyPermission(sessionID, reqId, decision);
         appendEvidence(db, "policy.decision", "floyd-core", { request_id: reqId, kind, decision, reason, raw: patterns }, {

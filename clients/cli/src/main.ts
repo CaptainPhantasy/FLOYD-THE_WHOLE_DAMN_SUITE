@@ -110,6 +110,73 @@ switch (cmd) {
     printJson(await api("POST", `/api/runs/${runId}/decision`, { action: cmd, actor: "douglas-cli" }));
     break;
   }
+  case "attach": {
+    const [sessionId, lastId] = rest;
+    if (!sessionId) fail("usage: floyd attach <session_id> [last_event_id]");
+    const r = await fetch(`${CORE}/api/sessions/${sessionId}/attach`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token()}`,
+        "content-type": "application/json",
+        ...(lastId ? { "last-event-id": lastId } : {}),
+      },
+      body: JSON.stringify({ actor: "douglas-cli" }),
+    });
+    if (!r.ok || !r.body) fail(`attach failed: ${r.status}`);
+    console.error(`[attached to ${sessionId}${lastId ? ` resuming after seq ${lastId}` : ""} — ctrl-c to stop]`);
+    const reader = r.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    let curSeq = "";
+    let curType = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const lines = buf.split("\n");
+      buf = lines.pop() ?? "";
+      for (const line of lines) {
+        if (line.startsWith("id:")) curSeq = line.slice(3).trim();
+        else if (line.startsWith("event:")) curType = line.slice(6).trim();
+        else if (line.startsWith("data:")) {
+          try {
+            const e = JSON.parse(line.slice(5).trim()) as Record<string, unknown>;
+            if (curType === "token") {
+              const d = (e.data ?? {}) as Record<string, unknown>;
+              process.stdout.write(String(d.delta ?? d.text ?? ""));
+            } else if (curType === "hello") {
+              console.error(`[hello last_seq=${(e as { last_seq?: number }).last_seq}]`);
+            } else {
+              const d = JSON.stringify(e.data ?? {}).slice(0, 160);
+              console.log(`\n[seq ${curSeq}] ${String(e.kind ?? "")} ${curType} ${d}`);
+              if (curType === "question") console.log(`  -> answer with: floyd answer ${sessionId} <request_id> <label>`);
+              if (curType === "permission") console.log(`  -> decide with: floyd grant|deny ${sessionId} <request_id>`);
+            }
+          } catch { /* skip */ }
+        }
+      }
+    }
+    break;
+  }
+  case "say": {
+    const [sessionId, ...text] = rest;
+    if (!sessionId || text.length === 0) fail("usage: floyd say <session_id> <text...>");
+    printJson(await api("POST", `/api/sessions/${sessionId}/steer`, { type: "steer", text: text.join(" "), actor: "douglas-cli" }));
+    break;
+  }
+  case "answer": {
+    const [sessionId, requestId, ...labels] = rest;
+    if (!sessionId || !requestId || labels.length === 0) fail("usage: floyd answer <session_id> <request_id> <label...>");
+    printJson(await api("POST", `/api/sessions/${sessionId}/steer`, { type: "answer", request_id: requestId, answers: [labels], actor: "douglas-cli" }));
+    break;
+  }
+  case "grant":
+  case "deny": {
+    const [sessionId, requestId] = rest;
+    if (!sessionId || !requestId) fail(`usage: floyd ${cmd} <session_id> <request_id>`);
+    printJson(await api("POST", `/api/sessions/${sessionId}/steer`, { type: "permission", request_id: requestId, reply: cmd === "grant" ? "once" : "reject", actor: "douglas-cli" }));
+    break;
+  }
   case "watch": {
     const [runId] = rest;
     if (!runId) fail("usage: floyd watch <run_id>");
@@ -166,5 +233,12 @@ usage:
   floyd run <run_id>               run detail (jobs, artifacts)
   floyd diff|tests|review <run_id> show run artifacts
   floyd accept|reject|escalate <run_id>
-  floyd evidence [run_id]          evidence ledger`);
+  floyd evidence [run_id]          evidence ledger
+  floyd attach <session> [seq]     live bidirectional channel (resume w/ seq)
+  floyd say <session> <text...>    steer the active turn
+  floyd answer <session> <req> <label...>   answer a question event
+  floyd grant|deny <session> <req> decide a permission event
+  floyd watch <run>                run-scoped event stream
+  floyd steer <run> <text...>      run-scoped steer (legacy)
+  floyd memory <project_id>        recalled memory with provenance`);
 }
