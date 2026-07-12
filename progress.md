@@ -204,3 +204,7 @@
 - TDD adopted mid-session per Douglas: engine-logic predicates + memory built test-first. Final: tsc clean, 14/14 unit tests.
 - Handback: docs/HANDBACK-2026-07-12-golden-path.md (ten proofs + blunt unavailable list). ADR-001/ADR-002 record corrections.
 - Honest gap: engine permission asks never fired in server mode — Floyd gate wired but unexercised; top follow-up.
+
+### Loop repeatability proof (second iteration, zero code changes)
+- run_mrh9l2jw0438cf235f92 "mode() via TDD" executed first-try through the live loop: lease → route receipt → builder session ses_0ab85429fffe… (glm-5.2) wrote 5 new tests + implementation (9/9 pass, exit 0) → reviewer session approved with substantive findings → explicit accept → merge 6113895 → 9/9 on main → all leases released → memory item auto-written by the decision path (2 source-attributed items now recallable).
+- This proves the connecting agent loop is a repeatable ecosystem facility, not a one-off script.
