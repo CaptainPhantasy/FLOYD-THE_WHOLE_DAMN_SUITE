@@ -1,4 +1,4 @@
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync, openSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -14,8 +14,6 @@ import { newestMessage, isTerminalAssistant, containsAssistantTurn } from "./eng
  * - GLM key fetched in-process from `omp auth-broker token zai`; never written to disk
  * - --pure until the Floyd plugin is audited/tested
  */
-
-const OMP_BIN = "/Users/douglastalley/.local/bin/omp";
 
 export class OpenCodeEngine {
   child: ChildProcess | null = null;
@@ -33,20 +31,17 @@ export class OpenCodeEngine {
   }
 
   /**
-   * Credential sourcing for the GLM Coding Plan (same provider+plan either way,
-   * so this is credential sourcing, not route fallback — recorded in evidence):
-   * 1. omp auth-broker token zai (canonical source per Douglas)
-   * 2. existing key in ~/.config/opencode/opencode.json (broker zai was stale
-   *    with HTTP 401 on 2026-07-12; refresh is an operator follow-up)
-   * Each candidate is validated against the coding endpoint; fail closed if none pass.
+   * Credential sourcing for the GLM Coding Plan.
+   * The omp auth-broker was removed as a source on 2026-07-12 (Douglas: the
+   * openmythos build must not be involved). Investigation record in ADR-001:
+   * `omp auth-broker token <provider>` ignores the provider arg and prints the
+   * broker's own bearer; its HTTP surface is an openmythos model gateway, not
+   * a key vault — wiring it would put openmythos-build code in the model path.
+   * Current source: the validated key from the user's opencode config.
+   * Every candidate is validated against the coding endpoint; fail closed if none pass.
    */
   async fetchGlmKey(): Promise<{ key: string; source: string }> {
     const candidates: Array<{ key: string; source: string }> = [];
-    const res = spawnSync(OMP_BIN, ["auth-broker", "token", "zai"], { encoding: "utf8", timeout: 15000 });
-    const brokerKey = (res.stdout ?? "").trim();
-    if (res.status === 0 && brokerKey.length >= 10) {
-      candidates.push({ key: brokerKey, source: "omp-auth-broker:zai" });
-    }
     try {
       const cfg = JSON.parse(readFileSync(join(process.env.HOME ?? "", ".config/opencode/opencode.json"), "utf8")) as {
         provider?: { "zai-coding-plan"?: { options?: { apiKey?: string } } };

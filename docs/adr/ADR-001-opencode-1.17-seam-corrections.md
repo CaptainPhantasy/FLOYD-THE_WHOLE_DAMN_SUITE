@@ -32,12 +32,23 @@ read-only audit. Live integration surfaced four divergences.
    `zai-coding-plan/glm-4.6` (its coding turns would fail the same way) — flagged
    as an operator follow-up, not touched by Floyd.
 
-## Credential sourcing (same plan, explicit, not a route fallback)
+## Credential sourcing — CORRECTED 2026-07-12 (omp broker removed entirely)
 
-`omp auth-broker token zai` vends a credential rejected by
-`https://api.z.ai/api/coding/paas/v4/models` (HTTP 401, verified 2026-07-12);
-the key in the user's opencode config validates (HTTP 200). Floyd Core validates
-broker-first and falls back to the validated config key, records the actual
-source in `engine.started` evidence, and fails closed when nothing validates.
-Refreshing the broker's `zai` credential is an operator follow-up; when done,
-Core automatically prefers the broker again.
+The initial "stale broker credential" reading was wrong. Verified facts:
+
+- `omp auth-broker token <provider>` **ignores the provider argument** and
+  prints the broker's own bearer token (proven: `token` and `token zai` return
+  identical values). The stored zai key was never being tested — it is fine.
+- The broker's HTTP surface (`/v1/chat/completions`, `/v1/messages`,
+  `/v1/credential` write-only) is a **model gateway**, not a key vault; there
+  is no credential *pull* route for external clients.
+- The `omp` launcher re-execs the **openmythos 16.3.6 build**
+  (`/Volumes/Storage/openmythos-build/oh-my-pi-v16.3.6-openmythos/…`), so any
+  broker involvement puts openmythos-build code in the credential/model path.
+- Douglas ruled: openmythos must not be involved in this harness.
+
+Decision: Floyd Core sources the GLM key from the user's opencode config only,
+validates it against the coding endpoint before spawn, and fails closed. The
+omp spawn was deleted from `engine.ts`. Additional footgun recorded: invoking
+`omp` corrupts the calling shell's PATH (post-invocation `command not found`
+for curl/head/python3 observed repeatedly).
