@@ -83,7 +83,10 @@ async function refreshRuns() {
 async function showRun(id, soft) {
   const isNew = currentRun !== id;
   currentRun = id;
-  if (isNew) setTimeout(() => attachRunStream(id), 50);
+  if (isNew) setTimeout(async () => {
+    const rd = await api("/api/runs/" + id);
+    attachRunStream(id, rd.session_id);
+  }, 50);
   const r = await api("/api/runs/" + id);
   const ev = await api("/api/evidence?run_id=" + id);
   const diff = await apiText(`/api/runs/${id}/artifact/diff`).catch(()=> "");
@@ -123,24 +126,39 @@ async function decide(action) {
   await refreshRuns(); await showRun(currentRun, true);
 }
 
-let runEs = null;
-function attachRunStream(id) {
+let runEs = null, currentSession = null;
+function attachRunStream(id, sessionId) {
   if (runEs) { runEs.close(); runEs = null; }
+  currentSession = sessionId;
   const feed = () => document.getElementById("livefeed");
-  runEs = new EventSource(`/api/runs/${id}/stream?token=` + encodeURIComponent(TOKEN));
-  runEs.addEventListener("engine", ev => {
-    const e = JSON.parse(ev.data);
-    const el = feed(); if (!el) return;
-    if (el.textContent.startsWith("(attach")) el.textContent = "";
-    el.textContent += `${new Date().toISOString().slice(11,19)} ${e.kind} ${e.type} ${JSON.stringify(e.properties||{}).slice(0,120)}\n`;
-    el.scrollTop = el.scrollHeight;
+  const append = (txt) => { const el = feed(); if (!el) return; if (el.textContent.startsWith("(attach")) el.textContent = ""; el.textContent += txt; el.scrollTop = el.scrollHeight; };
+  // primary channel: bidirectional session events (token/tool/question/permission)
+  runEs = new EventSource(`/api/sessions/${sessionId}/events?token=` + encodeURIComponent(TOKEN));
+  runEs.addEventListener("token", ev => {
+    const e = JSON.parse(ev.data); const d = e.data || {};
+    if (e.channel === "text") append(String(d.delta ?? d.text ?? ""));
+  });
+  runEs.addEventListener("tool_call_start", ev => {
+    const e = JSON.parse(ev.data); append(`\n⚙ ${((e.data||{}).tool)||"tool"} …`);
+  });
+  runEs.addEventListener("tool_call_finish", ev => { append(" done\n"); });
+  runEs.addEventListener("question", ev => {
+    const e = JSON.parse(ev.data); const rid = (e.data||{}).id;
+    const label = prompt(`Agent question (request ${rid}) — type your answer label:`);
+    if (label) api(`/api/sessions/${currentSession}/steer`, { method:"POST", body: JSON.stringify({ type:"answer", request_id: rid, answers: [[label]], actor: "douglas-cockpit" }) });
+  });
+  runEs.addEventListener("permission", ev => {
+    const e = JSON.parse(ev.data); const d = e.data||{}; const rid = d.id;
+    append(`\n🔐 permission ask: ${d.action} ${(d.resources||[]).join(",")}\n`);
+    const ok = confirm(`Grant ${d.action} for ${(d.resources||[]).join(", ")}?`);
+    api(`/api/sessions/${currentSession}/steer`, { method:"POST", body: JSON.stringify({ type:"permission", request_id: rid, reply: ok ? "once" : "reject", actor: "douglas-cockpit" }) });
   });
 }
 
 async function steerRun() {
   const text = document.getElementById("steerText").value.trim();
-  if (!currentRun || !text) return;
-  await api(`/api/runs/${currentRun}/steer`, { method: "POST", body: JSON.stringify({ text, actor: "douglas-cockpit" }) });
+  if (!currentSession || !text) return;
+  await api(`/api/sessions/${currentSession}/steer`, { method: "POST", body: JSON.stringify({ type: "steer", text, actor: "douglas-cockpit" }) });
   document.getElementById("steerText").value = "";
 }
 

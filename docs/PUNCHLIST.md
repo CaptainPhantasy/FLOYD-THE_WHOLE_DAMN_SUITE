@@ -99,17 +99,17 @@ capabilities stay visibly unavailable until their provider passes e2e.
 
 ### Objective 1 — Bidirectional session channel through the gateway (P0)
 
-- [ ] `GET /sessions/{sessionId}/events` — SSE emitting `token`, `tool_call_start`, `tool_call_finish`, `question`, `permission` in engine order.
-- [ ] `POST /sessions/{sessionId}/steer` — body `type: steer|answer|permission` forwarded to engine steer / question-reply / permission-reply.
-- [ ] `POST /sessions/{sessionId}/attach` — participant registration; `Last-Event-ID` replay of all events with seq > ID, then live.
-- [ ] Monotonic per-session `seq` on every event; engine emission order preserved.
-- [ ] CLI + Cockpit consume the channel as primary interaction (polling demoted).
-- [ ] ACCEPTANCE (all 5): curl-attached stream shows all five event types; mid-run steer reflected in output; answer continues a question; permission grant continues the run; disconnect→reconnect with Last-Event-ID replays missed events in order.
+- [x] `GET /api/sessions/{id}/events` — RECEIPT: acceptance run_mrhwuoeo, all five types observed over 2688 sequenced events.
+- [x] `POST /api/sessions/{id}/steer` — RECEIPT: steer/answer/permission all exercised live (evidence: engine.steer.submitted, engine.question.answered, policy.decision source=surface).
+- [x] `POST /api/sessions/{id}/attach` — participant registration + replay implemented; session.participant_attached evidence.
+- [x] Monotonic per-session `seq` — RECEIPT: replay from seq 1345 returned 1343 frames in order (sub-test 5 PASS).
+- [x] CLI (`attach/say/answer/grant`) + Cockpit (session-events pane, question/permission prompts, steer box) consume the channel as primary.
+- [x] ACCEPTANCE: tests/acceptance/objective1.py — RESULT: PASS, all 5 sub-tests (run_mrhwuoeo048dbb2e4596, exit 0).
 
 ### Objective 2 — Cross-surface session continuity (P0)
 
 - [ ] `cross_surface_parity_test` automated (CLI start → Cockpit attach mid-run → observe tokens → answer permission from Cockpit → CLI reflects, no state loss), CI-runnable, restart-proof rigor.
-- [ ] `docs/session-contract.md` — full request/response/SSE schemas for attach/events/steer; sufficient for a future mobile client with zero gateway changes.
+- [x] `docs/session-contract.md` written — attach/events/steer schemas, seq semantics, permission split, authority rule.
 - [ ] No second authority: surfaces never spawn Core; warn + instruct to check launchd. `ps` shows exactly one Core during parity test.
 
 ### Objective 3 — Skills & Memory before Terminal/PTY

@@ -219,3 +219,8 @@
 - live-channel.ts normalizer (TDD, 7 tests) + engine /api/event subscription (bare /event is heartbeat-only — verified), run-scoped SSE `GET /api/runs/:id/stream`, `POST /api/runs/:id/steer`, CLI watch/steer, cockpit live pane + steer input.
 - STEER PROOF: run_mrhwckwq04c59b65e0de asked for stats() with count+sum; mid-flight steer (actor douglas-cockpit) added min/max requirement; diff + tests show min/max; 17/17 pass. Evidence: engine.steer.submitted.
 - Remaining P1: live stream capture proof on fixed /api/event subscription (run 4) + cross-surface UI click.
+
+### Objective 1 — bidirectional session channel: COMPLETE (acceptance PASS, 2026-07-12)
+- tests/acceptance/objective1.py: all 5 sub-tests PASS (exit 0) on run_mrhwuoeo048dbb2e4596 — five event types streamed (2688 sequenced events), mid-run steer reflected in diff, question answered via channel (scale chosen), permission granted from surface (external note written after grant), Last-Event-ID replay from seq 1345 returned 1343 frames in order.
+- Permission semantics upgraded: AgentSpec-listed kinds auto-decided by Core; unlisted kinds stay pending for surfaces (policy.pending_surface_decision → surface policy.decision). Human-in-the-loop verified live.
+- docs/session-contract.md (Objective 2.2) written. Cockpit + CLI now consume the channel as primary. 27/27 unit tests, tsc clean.
