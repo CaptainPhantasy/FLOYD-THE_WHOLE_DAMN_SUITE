@@ -31,7 +31,7 @@ async function api(method: string, path: string, body?: unknown): Promise<unknow
       body: body ? JSON.stringify(body) : undefined,
     });
   } catch {
-    fail(`Floyd Core is not reachable at ${CORE}. Start it with: pnpm core (refusing to start a second authority from the CLI)`);
+    fail(`Floyd Core is not running — verify launchd service com.floyd.core (launchctl list | grep com.floyd.core). Surfaces never start Core themselves.`);
   }
   const text = await r.text();
   let data: unknown;

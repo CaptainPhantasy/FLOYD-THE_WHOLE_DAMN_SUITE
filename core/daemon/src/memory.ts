@@ -43,6 +43,25 @@ export function putMemory(db: Db, item: MemoryInput): string {
   return id;
 }
 
+/**
+ * Format recalled memory as a source-attributed context block for builder
+ * prompts (Objective 3.1). Pure — unit-tested. Always includes the project's
+ * test command; includes up to the 5 most recent items.
+ */
+export function formatMemoryContext(
+  items: Array<{ content: unknown; source_type: unknown; source_ref: unknown; created_at: unknown }>,
+  testCommand: string,
+): string {
+  const lines = [
+    `## Project memory (source-attributed; recalled by Floyd Core)`,
+    `- Test command for this project: \`${testCommand}\``,
+  ];
+  for (const it of items.slice(0, 5)) {
+    lines.push(`- ${String(it.content)} [source ${String(it.source_type)}:${String(it.source_ref)} @ ${String(it.created_at)}]`);
+  }
+  return lines.join("\n");
+}
+
 /** Recall project-scoped memory; each item states why it was retrieved. */
 export function recallMemory(db: Db, projectId: string): unknown[] {
   ensureMemorySchema(db);

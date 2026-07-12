@@ -8,7 +8,7 @@ import { appendEvidence } from "./evidence.ts";
 import { putArtifact, linkRunArtifact, getArtifact } from "./artifacts.ts";
 import { acquireLease, releaseLease } from "./leases.ts";
 import { addWorktree, removeWorktree, worktreeDiff, headSha, gitOrThrow, git } from "./git.ts";
-import { putMemory } from "./memory.ts";
+import { putMemory, recallMemory, formatMemoryContext } from "./memory.ts";
 import type { PermissionPolicy } from "@floyd/contracts";
 
 const PROVIDER_ID = "zai-coding-plan";
@@ -265,8 +265,18 @@ export async function executeRun(db: Db, engine: OpenCodeEngine, runId: string):
   // ---- builder task ----
   setJob(db, builder.id, { status: "running" });
   const goal = String(run.goal);
+  // Objective 3.1: recalled project memory rides into the builder prompt,
+  // source-attributed and evidenced.
+  const recalled = recallMemory(db, String(project.id)) as Array<{
+    content: unknown; source_type: unknown; source_ref: unknown; created_at: unknown;
+  }>;
+  const memoryBlock = formatMemoryContext(recalled, String(project.test_command ?? "node --test"));
+  appendEvidence(db, "memory.injected", "floyd-core", { items: recalled.length, chars: memoryBlock.length }, {
+    run_id: runId, job_id: builder.id, project_id: String(project.id),
+  });
   const builderPrompt = [
     `You are the Floyd builder agent working in a leased git worktree.`,
+    memoryBlock,
     `Task: ${goal}`,
     `Rules: work only inside the current directory. Do not push, do not change git config, do not touch anything outside this directory.`,
     `When the change is complete, ensure the project's tests pass (${String(project.test_command ?? "node --test")}).`,

@@ -79,3 +79,19 @@ test("memory items are source-attributed and explain retrieval", async () => {
   assert.equal(it.source_ref, "run_abc");
   assert.ok(String(it.why_retrieved).includes("project"));
 });
+
+test("memory context block formats recalled items for builder prompts", async () => {
+  const { formatMemoryContext } = await import("../src/memory.ts");
+  const block = formatMemoryContext(
+    [
+      { content: "Run X implemented median; merged abc123.", source_type: "run", source_ref: "run_X", created_at: "2026-07-12T00:00:00Z" },
+      { content: "Prefers TDD.", source_type: "user", source_ref: "douglas", created_at: "2026-07-12T01:00:00Z" },
+    ],
+    "node --test",
+  );
+  assert.ok(block.includes("Project memory"));
+  assert.ok(block.includes("median"));
+  assert.ok(block.includes("node --test"));
+  assert.ok(block.includes("run:run_X")); // source attribution visible in prompt
+  assert.equal(formatMemoryContext([], "npm test").includes("npm test"), true); // test command always present
+});

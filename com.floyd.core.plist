@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.floyd.core</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/node</string>
+    <string>/Volumes/Storage/FLOYD_WORKSTATION/core/daemon/src/main.ts</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Volumes/Storage/FLOYD_WORKSTATION</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>/Users/douglastalley</string>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>KeepAlive</key>
+  <true/>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/Volumes/Storage/FLOYD_RUNTIME/core/core.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Volumes/Storage/FLOYD_RUNTIME/core/core.err.log</string>
+</dict>
+</plist>
