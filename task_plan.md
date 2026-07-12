@@ -27,7 +27,9 @@ Determine, from direct inspection of every named FLOYD component and the live `f
 
 ## Current Phase
 
-Complete — official plan verified and ready for implementation handoff
+Implementation — golden path runtime-verified (2026-07-12); executing the
+full-feature punchlist below. The project is complete ONLY when every
+punchlist item is checked with receipts and every blueprint gate (A–H) passes.
 
 ## Phases
 
@@ -309,6 +311,12 @@ dual-surface (CLI + Cockpit) attach, restart proof, evidence ledger.
 
 - [x] Ten-item handback evidence, footguns, professional advice; commit.
 - **Status:** complete
+
+## Implementation Punchlist
+
+The authoritative, receipt-gated completion checklist lives at
+[`docs/PUNCHLIST.md`](docs/PUNCHLIST.md). The project is complete only when
+every item there is checked with evidence and blueprint gates A–H pass.
 
 ## Plan Maintenance
 

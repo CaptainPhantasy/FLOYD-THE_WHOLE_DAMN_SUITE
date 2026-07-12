@@ -1,5 +1,8 @@
 # FLOYD Workstation Repository Contract
 
+**Version:** 1.7.2
+**Governance:** .supercache/ v1.7.2
+
 ## Mission
 
 Build one private, persistent FLOYD workstation: coding, Browork, terminal, Git,
