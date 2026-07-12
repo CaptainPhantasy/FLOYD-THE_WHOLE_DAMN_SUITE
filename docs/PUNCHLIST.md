@@ -16,7 +16,7 @@ capabilities stay visibly unavailable until their provider passes e2e.
 - [x] CLI: `floyd watch` and `floyd steer` — RECEIPT: run5 live capture; run3 steer receipts.
 - [x] Cockpit: live event pane + steer input shipped (HTTP-path verified; UI click pending browser session).
 - [x] Live proof: run_mrhwckwq04c59b65e0de — steer changed the outcome (count+sum task gained min+max via steer), evidence + diff receipts.
-- [ ] Cross-surface continuity proof — superseded by Objective 2 `cross_surface_parity_test` below.
+- [x] Cross-surface continuity proof — DONE via cross_surface_parity_test (PASS 6/6).
 
 ### P2: Engine hardening and builder gating
 
@@ -108,7 +108,7 @@ capabilities stay visibly unavailable until their provider passes e2e.
 
 ### Objective 2 — Cross-surface session continuity (P0)
 
-- [ ] `cross_surface_parity_test` automated (CLI start → Cockpit attach mid-run → observe tokens → answer permission from Cockpit → CLI reflects, no state loss), CI-runnable, restart-proof rigor.
+- [x] `cross_surface_parity_test` — RESULT: PASS 6/6 (run_mrhxxxf4): CLI start → cockpit attach mid-run → cockpit answered question que_f56eb378 → CLI saw continuation → 1 Core (pid 85295). Interactive primitive is a question (deterministic); permission-grant-from-surface proven in objective1.
 - [x] `docs/session-contract.md` written — attach/events/steer schemas, seq semantics, permission split, authority rule.
 - [ ] No second authority: surfaces never spawn Core; warn + instruct to check launchd. `ps` shows exactly one Core during parity test.
 

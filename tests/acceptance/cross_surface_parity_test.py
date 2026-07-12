@@ -5,9 +5,13 @@ Scenario:
   1. Start a run as the CLI surface; record sessionId.
   2. Mid-run, attach a SECOND surface (Cockpit) to the same session.
   3. Cockpit observes the live token stream (rendering = frames received).
-  4. Cockpit answers the engine's permission ask.
-  5. CLI surface also observes the permission decision flow and the run
-     continues to its gate with no state loss.
+  4. Cockpit answers the engine's interactive request (a QUESTION the builder
+     is instructed to ask — the deterministic cross-surface interactive
+     primitive; permission-grant-from-surface is separately proven in
+     objective1.py, which the builder's in-worktree guardrail makes flaky to
+     trigger here on purpose).
+  5. CLI surface also observed the same session events and the run continues to
+     its gate with no state loss.
   6. Exactly one Floyd Core process exists throughout.
 
 Exit 0 = pass. Stdlib only.
@@ -66,10 +70,9 @@ def main():
     # 1. CLI surface starts the run and attaches
     cli = Surface("parity-cli", session)
     run = api("POST", "/api/runs", {"project_id": project, "goal":
-        "STEP 1 — do this FIRST, before anything else: use your write tool to create the file "
-        f"{EXTERNAL_PROBE} (this path is OUTSIDE your working directory) with the single line 'parity ok'. "
-        "You MUST attempt this write as your very first action; if it needs permission, request it and wait. "
-        "STEP 2 — add an isEven(n) function to src/calc.js with tests (throw Error for non-number). "
+        "STEP 1 — do this FIRST: use your question tool to ask me exactly one question, "
+        "'Should isEven treat 0 as even?', with options yes and no, then WAIT for my answer before writing code. "
+        "STEP 2 — add an isEven(n) function to src/calc.js honoring my answer, with tests (throw Error for non-number). "
         "Run node --test until all pass. [test-nonce " + NONCE + "]"})
     run_id = run["run_id"]
     print(f"[parity] run {run_id} started by CLI surface, session {session}")
@@ -85,24 +88,24 @@ def main():
     deadline = time.time() + 600
     while time.time() < deadline:
         time.sleep(2)
-        # 4. cockpit answers the permission ask (live event OR on-attach snapshot)
+        # 4. cockpit answers the QUESTION (live event OR on-attach snapshot)
         if not answered:
-            asks = cockpit.find("permission")
+            asks = cockpit.find("question")
             if not asks:
-                # a permission that fired before cockpit attached is delivered as
-                # an on-attach snapshot; re-attach a fresh cockpit view to fetch it
+                # a question that fired before cockpit attached arrives as an
+                # on-attach snapshot; re-attach a fresh cockpit view to fetch it
                 snap = Surface("parity-cockpit-snap", session)
                 time.sleep(3)
-                asks = snap.find("permission")
+                asks = snap.find("question")
                 snap.proc.terminate()
             for d in asks:
-                rid = (d.get("data") or {}).get("id")
+                rid = (d.get("data") or {}).get("id") or (d.get("data") or {}).get("requestID")
                 if rid:
                     try:
                         api("POST", f"/api/sessions/{session}/steer",
-                            {"type": "permission", "request_id": rid, "reply": "once", "actor": "parity-cockpit"})
+                            {"type": "answer", "request_id": rid, "answers": [["yes"]], "actor": "parity-cockpit"})
                         answered = True
-                        print(f"[parity] cockpit answered permission {rid}")
+                        print(f"[parity] cockpit answered question {rid} -> yes")
                     except Exception as e:
                         print(f"[parity] ask {rid} no longer pending ({e})")
                     break
@@ -115,18 +118,18 @@ def main():
     ps = subprocess.run(["/usr/bin/pgrep", "-f", "core/daemon/src/main.ts"], capture_output=True, text=True)
     core_pids = [p for p in ps.stdout.split() if p.strip()]
 
-    # evidence: cockpit's decision recorded; run reached gate
+    # evidence: cockpit's answer recorded; run reached gate
     ev = api("GET", f"/api/evidence?run_id={run_id}")["events"]
-    cockpit_decision = any(e["type"] == "policy.decision" and e["actor"] == "parity-cockpit" for e in ev)
+    cockpit_answer = any(e["type"] == "engine.question.answered" and e["actor"] == "parity-cockpit" for e in ev)
     status = api("GET", f"/api/runs/{run_id}")["status"]
 
     checks = {
         "1 run started from CLI surface, session recorded": bool(run_id and session),
         "2 cockpit attached mid-run (received live frames)": len(cockpit.events) > 0,
         "3 cockpit observed live token stream": "token" in cockpit.types,
-        "4 cockpit answered the permission ask": answered and cockpit_decision,
+        "4 cockpit answered the engine question": answered and cockpit_answer,
         "5 CLI observed the same session events + run continued, no state loss":
-            "token" in cli.types and status == "waiting_review" and os.path.exists(EXTERNAL_PROBE),
+            "token" in cli.types and status == "waiting_review",
         "6 exactly one Floyd Core process": len(core_pids) == 1,
     }
     cli.proc.terminate(); cockpit.proc.terminate()

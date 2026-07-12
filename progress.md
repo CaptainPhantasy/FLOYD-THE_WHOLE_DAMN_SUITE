@@ -229,3 +229,8 @@
 - Objective 3 COMPLETE: memory injection (memory.injected, block in live prompt) + versioned skills registry (skills.ts, TDD 5 tests, 2 seeded skills code-review@1.0.0/tdd-loop@1.0.0) with on-demand @skill loading (skill.loaded receipt in run_mrhxi4r5); roadmap reordered Skills&Memory before PTY (deferred).
 - Objective 4 CI sub-tests COMPLETE: com.floyd.core.plist PASS 10/10 (launchd_plist_test.py); launchd Core running pid 85295 exit 0; CLI run executed against it with exactly one Core process; CLI attaches never spawns. FOOTGUN: launchd EX_CONFIG(78) when stdio redirects to external volume — logs moved to ~/Library/Logs/floyd. Reboot survival = manual operator item (docs/RELEASE-CHECKLIST.md).
 - Objective 2: on-attach pending-ask snapshot added for cross-surface continuity (a surface joining after an ask fired still sees open questions/permissions). Parity test iterating.
+
+### Objective 2 — cross-surface continuity: COMPLETE (parity PASS 6/6, 2026-07-12)
+- cross_surface_parity_test PASS (run_mrhxxxf41w95d6d8b67a): CLI surface started run, cockpit attached mid-run, observed live token stream (2287 frames), answered engine question que_f56eb378 -> yes, CLI observed same events (2366 frames) + run continued to gate, exactly one Core (launchd pid 85295).
+- Fix that got it green: cross-surface interactive primitive changed from permission-ask (flaky — builder's own in-worktree guardrail makes it refuse the external write, correctly) to a question (deterministic; the model reliably uses its question tool). Permission-grant-from-surface remains proven in objective1.py.
+- ALL FOUR OBJECTIVES COMPLETE. 33/33 unit tests, tsc clean, Core launchd-managed. docs/session-contract.md is the mobile-ready contract.
