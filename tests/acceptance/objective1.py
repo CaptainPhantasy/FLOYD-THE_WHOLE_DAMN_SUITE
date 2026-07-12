@@ -11,6 +11,7 @@ Sub-tests (all must pass):
 Stdlib only. Exit 0 = pass, 1 = fail. Prints a receipt block.
 """
 import json, os, subprocess, sys, threading, time, urllib.request
+NONCE = str(int(time.time()))
 
 CORE = "http://127.0.0.1:41414"
 RUNTIME = os.environ.get("FLOYD_RUNTIME_ROOT", "/Volumes/Storage/FLOYD_RUNTIME")
@@ -60,7 +61,7 @@ def main():
             "'Which function name should I use?' with options scale and rescale, then wait for my answer. "
             "Implement the chosen function in src/calc.js multiplying every element of an array by a factor, with tests. "
             f"After tests pass, write a one-line completion note to {EXTERNAL_PROBE} "
-            "(outside your directory — attempt it and proceed if permitted). Run node --test until all tests pass.")
+            "(outside your directory — attempt it and proceed if permitted). Run node --test until all tests pass. [test-nonce " + NONCE + "]")
     run = api("POST", "/api/runs", {"project_id": project, "goal": goal})
     run_id = run["run_id"]
     print(f"[accept] run: {run_id}")

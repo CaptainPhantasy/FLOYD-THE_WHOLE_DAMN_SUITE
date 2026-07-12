@@ -23,9 +23,10 @@ Response: `200` with `Content-Type: text/event-stream` — the response IS the
 event stream (see next section for frame format). Attaching also appends a
 `session.participant_attached` evidence event with the actor.
 
-`Last-Event-ID` behavior: if the request carries a `Last-Event-ID: <seq>`
-header (or `?lastEventId=<seq>`), all buffered events with `seq > <seq>` are
-replayed, in order, before live events resume. Replay depth is bounded by the
+`Last-Event-ID` behavior: WITHOUT the header, the stream starts LIVE (no
+history replay — surfaces must never act on stale interactive events). WITH a
+`Last-Event-ID: <seq>` header (or `?lastEventId=<seq>`), all buffered events
+with `seq > <seq>` are replayed, in order, before live events resume. Replay depth is bounded by the
 gateway buffer (5000 events per session, in-memory; a Core restart clears it —
 clients reconnecting after a gateway restart receive `last_seq: 0` in the hello
 frame and should treat history as truncated).

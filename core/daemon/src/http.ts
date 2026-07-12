@@ -186,8 +186,12 @@ export function startGateway(db: Db, engine: OpenCodeEngine, corePid: number, st
           actor = body.actor ?? "anonymous";
           appendEvidence(db, "session.participant_attached", actor, { transport: "sse" }, { session_id: sessionId });
         }
-        const lastRaw = req.headers["last-event-id"] ?? url.searchParams.get("lastEventId") ?? "0";
-        const lastSeq = Number(Array.isArray(lastRaw) ? lastRaw[0] : lastRaw) || 0;
+        // Replay ONLY when the client supplies Last-Event-ID (contract §attach);
+        // a fresh attach starts live — replaying history caused surfaces to act
+        // on stale permission events (parity test finding, 2026-07-12).
+        const lastRaw = req.headers["last-event-id"] ?? url.searchParams.get("lastEventId");
+        const hasResume = lastRaw !== undefined && lastRaw !== null;
+        const lastSeq = hasResume ? Number(Array.isArray(lastRaw) ? lastRaw[0] : lastRaw) || 0 : sessionBuffer.lastSeq(sessionId);
         res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
         res.write(`event: hello\ndata: ${JSON.stringify({ session_id: sessionId, last_seq: sessionBuffer.lastSeq(sessionId), replay_from: lastSeq })}\n\n`);
         for (const e of sessionBuffer.since(sessionId, lastSeq)) {
@@ -222,13 +226,21 @@ export function startGateway(db: Db, engine: OpenCodeEngine, corePid: number, st
           if (!body.request_id) return send(res, 400, { error: "request_id required for answer" });
           const answers = body.answers ?? (body.text ? [[body.text]] : null);
           if (!answers) return send(res, 400, { error: "answers or text required" });
-          await engine.replyQuestion(target.engine_session_id, body.request_id, answers);
+          try {
+            await engine.replyQuestion(target.engine_session_id, body.request_id, answers);
+          } catch (err) {
+            return send(res, 410, { error: `question request not pending: ${String(err).slice(0, 120)}` });
+          }
           appendEvidence(db, "engine.question.answered", actor, { request_id: body.request_id }, {
             session_id: sessionId, run_id: target.run_id, job_id: target.job_id,
           });
         } else if (body.type === "permission") {
           if (!body.request_id || !body.reply) return send(res, 400, { error: "request_id and reply required" });
-          await engine.replyPermission(target.engine_session_id, body.request_id, body.reply);
+          try {
+            await engine.replyPermission(target.engine_session_id, body.request_id, body.reply);
+          } catch (err) {
+            return send(res, 410, { error: `permission request not pending (already decided or expired): ${String(err).slice(0, 120)}` });
+          }
           appendEvidence(db, "policy.decision", actor, { request_id: body.request_id, decision: body.reply, source: "surface" }, {
             session_id: sessionId, run_id: target.run_id, job_id: target.job_id,
           });
