@@ -58,7 +58,7 @@ capabilities stay visibly unavailable until their provider passes e2e.
 - [ ] Durable run DAG: dependencies, retries, stop conditions, cancellation.
 - [ ] Parallel workers on isolated worktree leases; forced-worker-loss recovery test; no merge without gate.
 
-### P9: Terminal provider (blueprint Phase D)
+### P9: Terminal provider (blueprint Phase D) — DEFERRED after Skills & Memory (Objective 3.3; not removed)
 
 - [ ] Scoped PTY provider with durable transcript/evidence refs (COHORT donor via copy-before-edit protocol).
 - [ ] No unauthenticated WebSocket, no arbitrary host-shell proxy (verified by test).
@@ -114,10 +114,10 @@ capabilities stay visibly unavailable until their provider passes e2e.
 
 ### Objective 3 — Skills & Memory before Terminal/PTY
 
-- [ ] Memory recall injected into builder prompt context (min: last completed run summary + project test command), visible in prompt.
-- [ ] Versioned skills registry: register `name@semver`, builder loads on demand, appears in builder tool/context surface.
-- [ ] Roadmap reordered: Skills & Memory (P5/P6) before Terminal/PTY (P9) — PTY deferred, not removed.
-- [ ] ACCEPTANCE: prompt inspection shows recalled memory; `code-review@1.0.0`-style skill loads on demand; roadmap order verified.
+- [x] Memory recall injected into builder prompt — RECEIPT: memory.injected (5 items, 1834 chars); block verified in live builder prompt (run_mrhxddmo).
+- [x] Versioned skills registry (skills.ts, TDD 5 tests): register name@semver + digest; builder loads via @skill:name@ver — RECEIPT: skill.loaded tdd-loop@1.0.0 in prompt (run_mrhxi4r5). Two real seeded skills: code-review@1.0.0, tdd-loop@1.0.0.
+- [x] Roadmap reordered: Skills & Memory (P5/P6) before Terminal/PTY (P9) — PTY deferred, not removed (see PTY note below).
+- [x] ACCEPTANCE: memory in prompt (verified), skill loads on demand (skill.loaded evidence + prompt body), roadmap order below.
 
 ### Objective 4 — Floyd Core under launchd
 

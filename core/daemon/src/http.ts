@@ -9,6 +9,7 @@ import { appendEvidence, listEvidence } from "./evidence.ts";
 import { createRun, executeRun, decideRun, getRunDetail, readRunArtifact } from "./runs.ts";
 import { getArtifact } from "./artifacts.ts";
 import { recallMemory } from "./memory.ts";
+import { listSkills, loadSkill, registerSkill } from "./skills.ts";
 import { normalizeEngineEvent, type SessionMap } from "./live-channel.ts";
 import { classifyEngineEvent, SessionBuffer } from "./session-channel.ts";
 
@@ -190,6 +191,19 @@ export function startGateway(db: Db, engine: OpenCodeEngine, corePid: number, st
           leases: db.prepare(`SELECT * FROM leases ORDER BY acquired_at DESC LIMIT 50`).all(),
           provider_profiles: db.prepare(`SELECT id, vendor, billing_class, plan_name, region, credential_ref, approved FROM provider_profiles`).all(),
         });
+      }
+      if (path === "/api/skills" && req.method === "GET") {
+        return send(res, 200, { skills: listSkills(db) });
+      }
+      if (path === "/api/skills" && req.method === "POST") {
+        const b = (await readBody(req)) as { name?: string; version?: string; body?: string; permissions?: string[] };
+        if (!b.name || !b.version || !b.body) return send(res, 400, { error: "name, version, body required" });
+        return send(res, 201, registerSkill(db, { name: b.name, version: b.version, body: b.body, permissions: b.permissions ?? [] }));
+      }
+      if (path.startsWith("/api/skills/") && req.method === "GET") {
+        const parts = path.split("/");
+        const sk = loadSkill(db, parts[3] ?? "", parts[4]);
+        return sk ? send(res, 200, sk) : send(res, 404, { error: "no such skill/version" });
       }
       if (path === "/api/memory") {
         const project_id = url.searchParams.get("project_id") ?? "";

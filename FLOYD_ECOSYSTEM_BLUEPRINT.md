@@ -508,6 +508,10 @@ Public organization repositories `aterm`, `control-center`, `Legacy_Oracle`, `za
 
 **Gate D:** parallel agents cannot race the same worktree; forced worker loss recovers correctly; no merge occurs without the configured evidence/approval gate.
 
+### Roadmap reordering 2026-07-12 (Objective 3)
+
+Skills & Memory (Phase E) are promoted AHEAD of the Terminal/PTY provider (Phase D's PTY work) for the Claude-style seamless goal: builder agents arrive carrying source-attributed project memory and load versioned skills on demand. The PTY provider is retained and scheduled after Skills & Memory integration — deferred, not removed.
+
 ### Phase E — Skills, memory, and artifacts
 
 - Create the versioned skill registry/conformance suite and rewrite a small high-value skill cohort.

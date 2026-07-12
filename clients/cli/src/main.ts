@@ -209,6 +209,17 @@ switch (cmd) {
     printJson(await api("POST", `/api/runs/${runId}/steer`, { text: text.join(" "), actor: "douglas-cli" }));
     break;
   }
+  case "skills": {
+    const s = (await api("GET", "/api/skills")) as { skills: unknown[] };
+    printJson(s.skills);
+    break;
+  }
+  case "skill": {
+    const [name, version] = rest;
+    if (!name) fail("usage: floyd skill <name> [version]");
+    printJson(await api("GET", `/api/skills/${name}${version ? "/" + version : ""}`));
+    break;
+  }
   case "memory": {
     const [projectId] = rest;
     if (!projectId) fail("usage: floyd memory <project_id>");

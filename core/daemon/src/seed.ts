@@ -1,5 +1,6 @@
 import type { Db } from "./db.ts";
 import { appendEvidence } from "./evidence.ts";
+import { registerSkill, ensureSkillsSchema } from "./skills.ts";
 
 /**
  * Durable bootstrap rows: the approved GLM provider profile and the two
@@ -44,5 +45,40 @@ export function seed(db: Db): void {
       ).run(s.id, s.name, s.role, s.model, JSON.stringify(s.policy));
       appendEvidence(db, "agent.spec_seeded", "floyd-core", { id: s.id, role: s.role, model: s.model, policy: s.policy });
     }
+  }
+  // Two audited, tested, permissioned skill packages (blueprint: not decorative titles).
+  ensureSkillsSchema(db);
+  const skills = [
+    {
+      name: "code-review",
+      version: "1.0.0",
+      permissions: ["read", "glob", "grep"],
+      body: [
+        "# Skill: code-review@1.0.0",
+        "When reviewing a change, verify in this order and report findings terse and risk-first:",
+        "1. Correctness: null/empty/boundary/off-by-one; does it match the stated intent?",
+        "2. Tests: is every claimed behavior asserted? are assertions meaningful (not tautological)?",
+        "3. Security: injection, secret leakage, unsafe input handling.",
+        "4. Maintainability: naming, duplication, matches surrounding style.",
+        "End with a single line: VERDICT: approve OR VERDICT: request_changes.",
+      ].join("\n"),
+    },
+    {
+      name: "tdd-loop",
+      version: "1.0.0",
+      permissions: ["read", "write", "edit", "bash"],
+      body: [
+        "# Skill: tdd-loop@1.0.0",
+        "Test-driven implementation loop:",
+        "1. Write the failing test(s) that pin the required behavior FIRST; run the suite and confirm they fail for the right reason.",
+        "2. Implement the minimum change to make them pass.",
+        "3. Re-run the full suite; refactor only with tests green.",
+        "Never claim done without showing the passing test runner output.",
+      ].join("\n"),
+    },
+  ];
+  for (const sk of skills) {
+    const exists = db.prepare(`SELECT name FROM skills WHERE name = ? AND version = ?`).get(sk.name, sk.version);
+    if (!exists) registerSkill(db, sk);
   }
 }

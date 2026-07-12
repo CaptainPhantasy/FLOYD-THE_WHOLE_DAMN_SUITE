@@ -9,6 +9,7 @@ import { putArtifact, linkRunArtifact, getArtifact } from "./artifacts.ts";
 import { acquireLease, releaseLease } from "./leases.ts";
 import { addWorktree, removeWorktree, worktreeDiff, headSha, gitOrThrow, git } from "./git.ts";
 import { putMemory, recallMemory, formatMemoryContext } from "./memory.ts";
+import { loadSkill } from "./skills.ts";
 import type { PermissionPolicy } from "@floyd/contracts";
 
 const PROVIDER_ID = "zai-coding-plan";
@@ -185,6 +186,15 @@ export interface SubmitResult {
   duplicate: boolean;
 }
 
+/** Parse `@skill:name` or `@skill:name@version` requests from a goal string. */
+export function parseSkillRequests(goal: string): Array<{ name: string; version?: string }> {
+  const out: Array<{ name: string; version?: string }> = [];
+  const re = /@skill:([a-z0-9-]+)(?:@(\d+\.\d+\.\d+))?/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(goal)) !== null) out.push({ name: m[1]!, version: m[2] });
+  return out;
+}
+
 /** Create (or find) a run for a goal. Idempotent on (project, goal) via job idempotency keys. */
 export function createRun(db: Db, projectId: string, goal: string): SubmitResult {
   const project = db.prepare(`SELECT * FROM projects WHERE id = ?`).get(projectId) as Record<string, unknown> | undefined;
@@ -274,9 +284,23 @@ export async function executeRun(db: Db, engine: OpenCodeEngine, runId: string):
   appendEvidence(db, "memory.injected", "floyd-core", { items: recalled.length, chars: memoryBlock.length }, {
     run_id: runId, job_id: builder.id, project_id: String(project.id),
   });
+  // Objective 3.2: load requested skills on demand into the builder context.
+  const skillBlocks: string[] = [];
+  for (const reqSkill of parseSkillRequests(goal)) {
+    const sk = loadSkill(db, reqSkill.name, reqSkill.version);
+    if (sk) {
+      skillBlocks.push(`## Loaded skill: ${sk.name}@${sk.version} (digest ${sk.digest.slice(0, 12)})\n${sk.body}`);
+      appendEvidence(db, "skill.loaded", "floyd-core", { name: sk.name, version: sk.version, digest: sk.digest }, {
+        run_id: runId, job_id: builder.id,
+      });
+    } else {
+      appendEvidence(db, "skill.load_failed", "floyd-core", { requested: reqSkill }, { run_id: runId, job_id: builder.id });
+    }
+  }
   const builderPrompt = [
     `You are the Floyd builder agent working in a leased git worktree.`,
     memoryBlock,
+    ...skillBlocks,
     `Task: ${goal}`,
     `Rules: work only inside the current directory. Do not push, do not change git config, do not touch anything outside this directory.`,
     `When the change is complete, ensure the project's tests pass (${String(project.test_command ?? "node --test")}).`,
