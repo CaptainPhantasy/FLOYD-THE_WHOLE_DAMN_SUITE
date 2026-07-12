@@ -4,7 +4,7 @@ import { OpenCodeEngine } from "./engine.ts";
 import { appendEvidence } from "./evidence.ts";
 import { seed } from "./seed.ts";
 import { recoverInterrupted } from "./runs.ts";
-import { startGateway } from "./http.ts";
+import { startGateway, startLiveChannel } from "./http.ts";
 
 async function main(): Promise<void> {
   const startedAt = nowIso();
@@ -37,11 +37,13 @@ async function main(): Promise<void> {
   });
 
   startGateway(db, engine, process.pid, startedAt);
-  appendEvidence(db, "core.gateway_listening", "floyd-core", { url: `http://${LOOPBACK}:${CORE_PORT}` });
+  const live = startLiveChannel(db, engine);
+  appendEvidence(db, "core.gateway_listening", "floyd-core", { url: `http://${LOOPBACK}:${CORE_PORT}`, live_channel: true });
   console.log(`[floyd-core] up pid=${process.pid} gateway=http://${LOOPBACK}:${CORE_PORT} engine=${engine.baseUrl} (opencode ${version} pid=${pid})`);
 
   const shutdown = async (sig: string) => {
     appendEvidence(db, "core.shutdown", "floyd-core", { signal: sig });
+    live.stop();
     await engine.stop();
     process.exit(0);
   };

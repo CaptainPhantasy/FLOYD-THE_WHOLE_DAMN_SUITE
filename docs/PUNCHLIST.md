@@ -10,13 +10,13 @@ capabilities stay visibly unavailable until their provider passes e2e.
 
 ### P1: Interactive session channel (Claude-style live surfaces) — in_progress
 
-- [ ] Engine `/event` SSE subscription in Core with floyd-ID attribution (pure normalizer, TDD).
-- [ ] `GET /api/runs/:id/stream` — token-gated live SSE per run on the gateway.
-- [ ] `POST /api/runs/:id/steer` — mid-run steer to the builder session (`delivery: steer`), evidenced.
-- [ ] CLI: `floyd watch <run>` and `floyd steer <run> <text…>`.
-- [ ] Cockpit: live event pane + steer input on the run view.
-- [ ] Live proof: a run steered mid-flight; steer text visible in transcript artifact and evidence ledger.
-- [ ] Cross-surface continuity proof: watch in CLI, steer/decide from Cockpit (or inverse), same IDs.
+- [x] Engine event subscription in Core with floyd-ID attribution (pure normalizer, TDD; live bus is `/api/event` — bare `/event` only heartbeats; 21/21 tests).
+- [x] `GET /api/runs/:id/stream` — RECEIPT: run5 watcher captured 446 live attributed events (route-shadowing bug fixed).
+- [x] `POST /api/runs/:id/steer` — RECEIPT: run_mrhwckwq steered mid-flight (evidence engine.steer.submitted 14:37:12); min/max landed in diff + tests 17/17.
+- [x] CLI: `floyd watch` and `floyd steer` — RECEIPT: run5 live capture; run3 steer receipts.
+- [x] Cockpit: live event pane + steer input shipped (HTTP-path verified; UI click pending browser session).
+- [x] Live proof: run_mrhwckwq04c59b65e0de — steer changed the outcome (count+sum task gained min+max via steer), evidence + diff receipts.
+- [ ] Cross-surface continuity proof — superseded by Objective 2 `cross_surface_parity_test` below.
 
 ### P2: Engine hardening and builder gating
 
@@ -94,3 +94,33 @@ capabilities stay visibly unavailable until their provider passes e2e.
 
 - [ ] Signed launcher/desktop packaging; private installer; operator runbooks.
 - [ ] Alias cutover one command at a time after parity; rollback verified; website updated from sanitized evidence only.
+
+## Directive 2026-07-12: Bidirectional Session Channel slice (Douglas's spec — execute in order)
+
+### Objective 1 — Bidirectional session channel through the gateway (P0)
+
+- [ ] `GET /sessions/{sessionId}/events` — SSE emitting `token`, `tool_call_start`, `tool_call_finish`, `question`, `permission` in engine order.
+- [ ] `POST /sessions/{sessionId}/steer` — body `type: steer|answer|permission` forwarded to engine steer / question-reply / permission-reply.
+- [ ] `POST /sessions/{sessionId}/attach` — participant registration; `Last-Event-ID` replay of all events with seq > ID, then live.
+- [ ] Monotonic per-session `seq` on every event; engine emission order preserved.
+- [ ] CLI + Cockpit consume the channel as primary interaction (polling demoted).
+- [ ] ACCEPTANCE (all 5): curl-attached stream shows all five event types; mid-run steer reflected in output; answer continues a question; permission grant continues the run; disconnect→reconnect with Last-Event-ID replays missed events in order.
+
+### Objective 2 — Cross-surface session continuity (P0)
+
+- [ ] `cross_surface_parity_test` automated (CLI start → Cockpit attach mid-run → observe tokens → answer permission from Cockpit → CLI reflects, no state loss), CI-runnable, restart-proof rigor.
+- [ ] `docs/session-contract.md` — full request/response/SSE schemas for attach/events/steer; sufficient for a future mobile client with zero gateway changes.
+- [ ] No second authority: surfaces never spawn Core; warn + instruct to check launchd. `ps` shows exactly one Core during parity test.
+
+### Objective 3 — Skills & Memory before Terminal/PTY
+
+- [ ] Memory recall injected into builder prompt context (min: last completed run summary + project test command), visible in prompt.
+- [ ] Versioned skills registry: register `name@semver`, builder loads on demand, appears in builder tool/context surface.
+- [ ] Roadmap reordered: Skills & Memory (P5/P6) before Terminal/PTY (P9) — PTY deferred, not removed.
+- [ ] ACCEPTANCE: prompt inspection shows recalled memory; `code-review@1.0.0`-style skill loads on demand; roadmap order verified.
+
+### Objective 4 — Floyd Core under launchd
+
+- [ ] `com.floyd.core.plist` (Label/KeepAlive/RunAtLoad/exec path/log paths per auth-broker pattern).
+- [ ] Loaded via launchctl; `launchctl list` shows running; exactly one Core process during runs; CLI attaches, never spawns.
+- [ ] Reboot survival: manual operator checklist item (not CI); record in release checklist.

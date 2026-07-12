@@ -81,7 +81,9 @@ async function refreshRuns() {
 }
 
 async function showRun(id, soft) {
+  const isNew = currentRun !== id;
   currentRun = id;
+  if (isNew) setTimeout(() => attachRunStream(id), 50);
   const r = await api("/api/runs/" + id);
   const ev = await api("/api/evidence?run_id=" + id);
   const diff = await apiText(`/api/runs/${id}/artifact/diff`).catch(()=> "");
@@ -100,6 +102,10 @@ async function showRun(id, soft) {
       <button class="reject" ${canDecide?"":"disabled"} onclick="decide('reject')">Reject</button>
       <button ${canDecide?"":"disabled"} onclick="decide('escalate')">Escalate</button>
     </p>
+    <h2>Live channel</h2>
+    <p><input id="steerText" placeholder="steer the builder mid-run…" style="width:60%;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:6px 10px;font:inherit">
+    <button onclick="steerRun()">Steer</button></p>
+    <pre id="livefeed" style="max-height:220px">(attach: live engine events for this run appear here)</pre>
     <h2>Jobs</h2>${jobs || "<div class='unavail'>none</div>"}
     <h2>Artifacts</h2>${arts || "<div class='unavail'>none</div>"}
     <h2>Diff</h2><pre>${escapeHtml(diff || "(none yet)")}</pre>
@@ -115,6 +121,27 @@ async function decide(action) {
   if (!confirm(`${action} run ${currentRun}?`)) return;
   await api(`/api/runs/${currentRun}/decision`, { method:"POST", body: JSON.stringify({ action, actor: "douglas-cockpit" }) });
   await refreshRuns(); await showRun(currentRun, true);
+}
+
+let runEs = null;
+function attachRunStream(id) {
+  if (runEs) { runEs.close(); runEs = null; }
+  const feed = () => document.getElementById("livefeed");
+  runEs = new EventSource(`/api/runs/${id}/stream?token=` + encodeURIComponent(TOKEN));
+  runEs.addEventListener("engine", ev => {
+    const e = JSON.parse(ev.data);
+    const el = feed(); if (!el) return;
+    if (el.textContent.startsWith("(attach")) el.textContent = "";
+    el.textContent += `${new Date().toISOString().slice(11,19)} ${e.kind} ${e.type} ${JSON.stringify(e.properties||{}).slice(0,120)}\n`;
+    el.scrollTop = el.scrollHeight;
+  });
+}
+
+async function steerRun() {
+  const text = document.getElementById("steerText").value.trim();
+  if (!currentRun || !text) return;
+  await api(`/api/runs/${currentRun}/steer`, { method: "POST", body: JSON.stringify({ text, actor: "douglas-cockpit" }) });
+  document.getElementById("steerText").value = "";
 }
 
 function connectSse() {

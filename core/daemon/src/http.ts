@@ -9,17 +9,47 @@ import { appendEvidence, listEvidence } from "./evidence.ts";
 import { createRun, executeRun, decideRun, getRunDetail, readRunArtifact } from "./runs.ts";
 import { getArtifact } from "./artifacts.ts";
 import { recallMemory } from "./memory.ts";
+import { normalizeEngineEvent, type SessionMap } from "./live-channel.ts";
 
 const COCKPIT_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "apps", "cockpit", "public");
 
-type SseClient = { res: ServerResponse };
+type SseClient = { res: ServerResponse; run_id?: string };
 const sseClients = new Set<SseClient>();
 
-export function broadcast(event: string, data: unknown): void {
+export function broadcast(event: string, data: unknown, runId?: string): void {
   const msg = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
   for (const c of sseClients) {
+    if (runId && c.run_id && c.run_id !== runId) continue;
+    if (!runId && c.run_id) continue; // run-scoped clients only get their run's events
     try { c.res.write(msg); } catch { sseClients.delete(c); }
   }
+}
+
+/** Engine-session → Floyd attribution, refreshed from the jobs table. */
+export function loadSessionMap(db: Db): SessionMap {
+  const rows = db
+    .prepare(`SELECT engine_session_id, run_id, id, kind FROM jobs WHERE engine_session_id IS NOT NULL`)
+    .all() as Array<Record<string, unknown>>;
+  const map: SessionMap = new Map();
+  for (const r of rows) {
+    map.set(String(r.engine_session_id), { run_id: String(r.run_id), job_id: String(r.id), kind: String(r.kind) });
+  }
+  return map;
+}
+
+/** Wire the engine's /event stream into Floyd-attributed SSE broadcasts. */
+export function startLiveChannel(db: Db, engine: OpenCodeEngine): { stop: () => void } {
+  return engine.subscribeEvents((evt) => {
+    const out = normalizeEngineEvent(evt, loadSessionMap(db));
+    if (!out) return;
+    broadcast("engine", out, out.run_id);
+    if (out.is_permission_ask) {
+      appendEvidence(db, "engine.permission_ask_observed", "floyd-core", { event: out.type, properties: out.properties }, {
+        run_id: out.run_id,
+        job_id: out.job_id,
+      });
+    }
+  });
 }
 
 async function readBody(req: IncomingMessage): Promise<unknown> {
@@ -79,6 +109,16 @@ export function startGateway(db: Db, engine: OpenCodeEngine, corePid: number, st
       if (path === "/api/evidence") {
         const run_id = url.searchParams.get("run_id") ?? undefined;
         return send(res, 200, { events: listEvidence(db, { run_id, limit: 500 }) });
+      }
+      if (path.match(/^\/api\/runs\/[^/]+\/stream$/) && req.method === "GET") {
+        const runId = path.split("/")[3] ?? "";
+        if (!db.prepare(`SELECT id FROM runs WHERE id = ?`).get(runId)) return send(res, 404, { error: "no such run" });
+        res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
+        res.write(`event: hello\ndata: ${JSON.stringify({ run_id: runId })}\n\n`);
+        const client = { res, run_id: runId };
+        sseClients.add(client);
+        req.on("close", () => sseClients.delete(client));
+        return;
       }
       if (path.startsWith("/api/runs/") && req.method === "GET") {
         const parts = path.split("/");
@@ -157,6 +197,22 @@ export function startGateway(db: Db, engine: OpenCodeEngine, corePid: number, st
         sseClients.add(client);
         req.on("close", () => sseClients.delete(client));
         return;
+      }
+      if (path.match(/^\/api\/runs\/[^/]+\/steer$/) && req.method === "POST") {
+        const runId = path.split("/")[3] ?? "";
+        const body = (await readBody(req)) as { text?: string; actor?: string };
+        if (!body.text) return send(res, 400, { error: "text required" });
+        const builder = db
+          .prepare(`SELECT id, engine_session_id, status FROM jobs WHERE run_id = ? AND kind = 'builder'`)
+          .get(runId) as Record<string, unknown> | undefined;
+        if (!builder?.engine_session_id) return send(res, 409, { error: "run has no active builder engine session" });
+        await engine.steer(String(builder.engine_session_id), body.text);
+        appendEvidence(db, "engine.steer.submitted", body.actor ?? "douglas", { chars: body.text.length, text: body.text.slice(0, 500) }, {
+          run_id: runId,
+          job_id: String(builder.id),
+        });
+        broadcast("engine", { type: "floyd.steer.submitted", run_id: runId, job_id: String(builder.id), kind: "builder", properties: { text: body.text } }, runId);
+        return send(res, 202, { run_id: runId, steered: true });
       }
 
       // ---------- cockpit static ----------

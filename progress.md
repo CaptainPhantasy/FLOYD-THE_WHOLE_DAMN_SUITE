@@ -213,3 +213,9 @@
 - 1.17.15 ignores the `permission` config field (global AND agent-level) — compiled PermissionV2 ruleset stays base allow-all inside the session directory; asks only on external_directory and .env reads. Config echoes intent while policy differs: upstream gap report item.
 - Ask/reply machinery verified working in server mode: external-directory write fired an ask in ~10s; reject via REST blocked the write (file absent).
 - Fix shipped: `floyd-reviewer` engine agent with write/edit/bash/patch/multiedit disabled (adversarial test: model attempted all four, engine blocked all, no mutation) + Core-side reviewer empty-diff invariant (`review.mutation_detected`). Commit e1f5372.
+
+### P1 Interactive session channel (in progress, 2026-07-12)
+- Governance bootstrap repaired to 13/13 (bootstrap.sh --repair; agent log, supercache link, FLOYD.md header). Punchlist authoritative at docs/PUNCHLIST.md.
+- live-channel.ts normalizer (TDD, 7 tests) + engine /api/event subscription (bare /event is heartbeat-only — verified), run-scoped SSE `GET /api/runs/:id/stream`, `POST /api/runs/:id/steer`, CLI watch/steer, cockpit live pane + steer input.
+- STEER PROOF: run_mrhwckwq04c59b65e0de asked for stats() with count+sum; mid-flight steer (actor douglas-cockpit) added min/max requirement; diff + tests show min/max; 17/17 pass. Evidence: engine.steer.submitted.
+- Remaining P1: live stream capture proof on fixed /api/event subscription (run 4) + cross-surface UI click.

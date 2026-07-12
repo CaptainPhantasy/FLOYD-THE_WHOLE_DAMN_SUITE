@@ -110,6 +110,38 @@ switch (cmd) {
     printJson(await api("POST", `/api/runs/${runId}/decision`, { action: cmd, actor: "douglas-cli" }));
     break;
   }
+  case "watch": {
+    const [runId] = rest;
+    if (!runId) fail("usage: floyd watch <run_id>");
+    const r = await fetch(`${CORE}/api/runs/${runId}/stream`, { headers: { authorization: `Bearer ${token()}` } });
+    if (!r.ok || !r.body) fail(`stream unavailable: ${r.status}`);
+    console.error(`[watching ${runId} — ctrl-c to stop]`);
+    const reader = r.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const lines = buf.split("\n");
+      buf = lines.pop() ?? "";
+      for (const line of lines) {
+        if (!line.startsWith("data:")) continue;
+        try {
+          const e = JSON.parse(line.slice(5).trim()) as { type?: string; kind?: string; properties?: unknown };
+          const detail = JSON.stringify(e.properties ?? {}).slice(0, 140);
+          console.log(`${new Date().toISOString().slice(11, 19)} ${e.kind ?? "-"} ${e.type ?? "hello"} ${detail}`);
+        } catch { /* skip */ }
+      }
+    }
+    break;
+  }
+  case "steer": {
+    const [runId, ...text] = rest;
+    if (!runId || text.length === 0) fail("usage: floyd steer <run_id> <text...>");
+    printJson(await api("POST", `/api/runs/${runId}/steer`, { text: text.join(" "), actor: "douglas-cli" }));
+    break;
+  }
   case "memory": {
     const [projectId] = rest;
     if (!projectId) fail("usage: floyd memory <project_id>");

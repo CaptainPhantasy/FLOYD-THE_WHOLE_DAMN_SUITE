@@ -171,6 +171,47 @@ export class OpenCodeEngine {
     await this.api("POST", `/api/session/${sessionID}/prompt`, { prompt: { text } });
   }
 
+  /** Mid-run steer: injects guidance into the active turn (1.17.15 delivery enum: steer|queue). */
+  async steer(sessionID: string, text: string): Promise<void> {
+    await this.api("POST", `/api/session/${sessionID}/prompt`, { prompt: { text }, delivery: "steer" });
+  }
+
+  /**
+   * Long-lived subscription to the engine's /event SSE stream. Reconnects with
+   * backoff until stop() flips. Each parsed JSON frame is passed to onEvent.
+   */
+  subscribeEvents(onEvent: (evt: unknown) => void): { stop: () => void } {
+    let stopped = false;
+    const run = async () => {
+      while (!stopped) {
+        try {
+          // /api/event is the live bus in 1.17.15; bare /event only emits heartbeats (verified live)
+          const res = await fetch(`${this.baseUrl}/api/event`, { signal: AbortSignal.timeout(86400000) });
+          if (!res.ok || !res.body) throw new Error(`event stream ${res.status}`);
+          const reader = res.body.getReader();
+          const decoder = new TextDecoder();
+          let buf = "";
+          while (!stopped) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buf += decoder.decode(value, { stream: true });
+            const lines = buf.split("\n");
+            buf = lines.pop() ?? "";
+            for (const line of lines) {
+              if (!line.startsWith("data:")) continue;
+              try {
+                onEvent(JSON.parse(line.slice(5).trim()));
+              } catch { /* non-JSON frame */ }
+            }
+          }
+        } catch { /* engine restarting; retry */ }
+        if (!stopped) await new Promise((r) => setTimeout(r, 1500));
+      }
+    };
+    void run();
+    return { stop: () => { stopped = true; } };
+  }
+
   async setSessionModel(sessionID: string, providerID: string, modelID: string): Promise<void> {
     await this.api("POST", `/api/session/${sessionID}/model`, { model: { providerID, id: modelID } });
   }
