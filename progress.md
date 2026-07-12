@@ -208,3 +208,8 @@
 ### Loop repeatability proof (second iteration, zero code changes)
 - run_mrh9l2jw0438cf235f92 "mode() via TDD" executed first-try through the live loop: lease → route receipt → builder session ses_0ab85429fffe… (glm-5.2) wrote 5 new tests + implementation (9/9 pass, exit 0) → reviewer session approved with substantive findings → explicit accept → merge 6113895 → 9/9 on main → all leases released → memory item auto-written by the decision path (2 source-attributed items now recallable).
 - This proves the connecting agent loop is a repeatable ecosystem facility, not a one-off script.
+
+### Permission root cause (resolved, live-verified 2026-07-12)
+- 1.17.15 ignores the `permission` config field (global AND agent-level) — compiled PermissionV2 ruleset stays base allow-all inside the session directory; asks only on external_directory and .env reads. Config echoes intent while policy differs: upstream gap report item.
+- Ask/reply machinery verified working in server mode: external-directory write fired an ask in ~10s; reject via REST blocked the write (file absent).
+- Fix shipped: `floyd-reviewer` engine agent with write/edit/bash/patch/multiedit disabled (adversarial test: model attempted all four, engine blocked all, no mutation) + Core-side reviewer empty-diff invariant (`review.mutation_detected`). Commit e1f5372.

@@ -104,12 +104,17 @@ none validates.
 
 ## 10. Blunt list of what is NOT available
 
-- **Engine-side permission asks never fired.** `permission:{edit:ask,bash:ask}`
-  is loaded (verified via /config) but 1.17.15 server mode executed edit/bash
-  without surfacing permission requests; Floyd's gate/policy code is wired and
-  polling but was never exercised. Treat engine tool gating as NOT strict yet.
-  Root-causing this (agent-level permission profiles / server-mode semantics)
-  is the top follow-up.
+- **[RESOLVED 2026-07-12] Engine permission root cause:** 1.17.15 silently
+  ignores the `permission` config field (global and per-agent) when compiling
+  PermissionV2 rulesets — built-in policy is allow-all inside the session
+  directory, ask on `external_directory` and `.env` reads. The ask/reply
+  machinery works in server mode (verified live: external write fired an ask;
+  Floyd-style reject blocked it). Reviewer read-only is now enforced by the
+  `floyd-reviewer` agent with mutating tools disabled (adversarially verified:
+  write/bash/apply_patch/edit all blocked) plus a Core-side empty-diff
+  invariant with `review.mutation_detected` evidence. Remaining upstream gap:
+  builder-side *in-worktree* edit/bash cannot be made "ask" via config in this
+  build — the worktree lease + explicit merge gate are the effective controls.
 - **Floyd OpenCode plugin not built** (ADR-002); running `--pure`.
 - **Cockpit is a minimal first-party page,** not the CodeNomad adoption; no
   visual browser screenshot this session (extension disconnected) — verified
