@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Floyd Cockpit</title>
+<style>
+  :root { color-scheme: dark; --bg:#0d1117; --panel:#161b22; --line:#30363d; --fg:#e6edf3; --dim:#8b949e; --acc:#e3b341; --ok:#3fb950; --err:#f85149; }
+  * { box-sizing: border-box; }
+  body { margin:0; font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background:var(--bg); color:var(--fg); }
+  header { padding:10px 16px; border-bottom:1px solid var(--line); display:flex; gap:16px; align-items:baseline; }
+  header h1 { font-size:15px; margin:0; color:var(--acc); letter-spacing:2px; }
+  #health { color: var(--dim); }
+  main { display:grid; grid-template-columns: 320px 1fr; gap:0; min-height: calc(100vh - 42px); }
+  nav { border-right:1px solid var(--line); padding:12px; overflow-y:auto; }
+  section { padding:12px 16px; overflow-x:auto; }
+  h2 { font-size:12px; text-transform:uppercase; color:var(--dim); margin:14px 0 6px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:8px 10px; margin-bottom:8px; cursor:pointer; }
+  .card:hover { border-color: var(--acc); }
+  .card .id { color:var(--dim); font-size:11px; }
+  .status { font-weight:bold; }
+  .status.waiting_review { color: var(--acc); }
+  .status.accepted, .status.succeeded { color: var(--ok); }
+  .status.failed, .status.rejected { color: var(--err); }
+  pre { background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:10px; overflow-x:auto; white-space:pre-wrap; max-height:400px; overflow-y:auto; }
+  button { background:var(--panel); color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:6px 14px; font:inherit; cursor:pointer; margin-right:8px; }
+  button.accept { border-color: var(--ok); color: var(--ok); }
+  button.reject { border-color: var(--err); color: var(--err); }
+  button:disabled { opacity:.4; cursor:default; }
+  .evrow { border-bottom:1px solid var(--line); padding:3px 0; }
+  .evrow .t { color:var(--acc); }
+  .unavail { color:var(--dim); font-style:italic; }
+</style>
+</head>
+<body>
+<header>
+  <h1>FLOYD</h1>
+  <div id="health">connecting…</div>
+</header>
+<main>
+  <nav>
+    <h2>Runs</h2>
+    <div id="runs"></div>
+    <h2>Capabilities</h2>
+    <div class="unavail">terminal: unavailable — PTY provider not yet integrated (Phase D)</div>
+    <div class="unavail">media: unavailable — no provider passed e2e test (Phase F)</div>
+    <div class="unavail">mobile/browser/lab: unavailable — contracts only (Phase G)</div>
+  </nav>
+  <section id="detail"><p class="unavail">Select a run.</p></section>
+</main>
+<script>
+const qs = new URLSearchParams(location.search);
+const TOKEN = qs.get("token") || localStorage.getItem("floyd_token") || "";
+if (qs.get("token")) { localStorage.setItem("floyd_token", qs.get("token")); history.replaceState({}, "", "/"); }
+const H = { authorization: "Bearer " + TOKEN };
+const api = (p, opt={}) => fetch(p, { ...opt, headers: { ...H, ...(opt.body ? {"content-type":"application/json"} : {}) } }).then(r => r.json());
+const apiText = p => fetch(p, { headers: H }).then(r => r.text());
+
+let currentRun = null;
+
+async function refreshHealth() {
+  try {
+    const h = await api("/api/health");
+    document.getElementById("health").textContent =
+      `core pid ${h.pid} @ ${new Date(h.started_at).toLocaleTimeString()} · engine ${h.engine.ok ? "OK" : "DOWN"} (opencode, loopback) · ${h.now}`;
+  } catch { document.getElementById("health").textContent = "core unreachable"; }
+}
+
+async function refreshRuns() {
+  const s = await api("/api/state");
+  const el = document.getElementById("runs");
+  el.innerHTML = "";
+  for (const r of s.runs) {
+    const d = document.createElement("div");
+    d.className = "card";
+    d.innerHTML = `<div class="status ${r.status}">${r.status}</div><div>${r.goal.slice(0,80)}</div><div class="id">${r.id}<br>project ${r.project_id}<br>session ${r.session_id}</div>`;
+    d.onclick = () => showRun(r.id);
+    el.appendChild(d);
+  }
+  if (currentRun) showRun(currentRun, true);
+}
+
+async function showRun(id, soft) {
+  currentRun = id;
+  const r = await api("/api/runs/" + id);
+  const ev = await api("/api/evidence?run_id=" + id);
+  const diff = await apiText(`/api/runs/${id}/artifact/diff`).catch(()=> "");
+  const tests = await apiText(`/api/runs/${id}/artifact/test_output`).catch(()=> "");
+  const canDecide = r.status === "waiting_review";
+  const jobs = (r.jobs||[]).map(j =>
+    `<div class="evrow">${j.kind} <span class="status ${j.status}">${j.status}</span> <span class="id">${j.id} · engine session ${j.engine_session_id ?? "—"} · lease ${j.worktree_lease_id ?? "—"}</span></div>`).join("");
+  const arts = (r.artifacts||[]).map(a => `<div class="evrow">${a.role}: <span class="id">${a.id}</span> (${a.bytes} B)</div>`).join("");
+  const evs = (ev.events||[]).map(e => `<div class="evrow"><span class="t">${e.type}</span> <span class="id">${e.ts} ${e.id}</span></div>`).join("");
+  document.getElementById("detail").innerHTML = `
+    <h2>Run ${r.id} — <span class="status ${r.status}">${r.status}</span></h2>
+    <div>${r.goal}</div>
+    <div class="id">project ${r.project_id} · session ${r.session_id}</div>
+    <p>
+      <button class="accept" ${canDecide?"":"disabled"} onclick="decide('accept')">Accept &amp; merge</button>
+      <button class="reject" ${canDecide?"":"disabled"} onclick="decide('reject')">Reject</button>
+      <button ${canDecide?"":"disabled"} onclick="decide('escalate')">Escalate</button>
+    </p>
+    <h2>Jobs</h2>${jobs || "<div class='unavail'>none</div>"}
+    <h2>Artifacts</h2>${arts || "<div class='unavail'>none</div>"}
+    <h2>Diff</h2><pre>${escapeHtml(diff || "(none yet)")}</pre>
+    <h2>Test output</h2><pre>${escapeHtml(tests || "(none yet)")}</pre>
+    <h2>Evidence (${(ev.events||[]).length})</h2>${evs}`;
+  if (!soft) window.scrollTo(0,0);
+}
+
+function escapeHtml(s){ return s.replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+
+async function decide(action) {
+  if (!currentRun) return;
+  if (!confirm(`${action} run ${currentRun}?`)) return;
+  await api(`/api/runs/${currentRun}/decision`, { method:"POST", body: JSON.stringify({ action, actor: "douglas-cockpit" }) });
+  await refreshRuns(); await showRun(currentRun, true);
+}
+
+function connectSse() {
+  const es = new EventSource("/api/events?token=" + encodeURIComponent(TOKEN));
+  es.addEventListener("run", () => refreshRuns());
+  es.onerror = () => { es.close(); setTimeout(connectSse, 3000); };
+}
+
+refreshHealth(); refreshRuns(); connectSse();
+setInterval(refreshHealth, 5000);
+</script>
+</body>
+</html>

@@ -1,0 +1,20 @@
+{
+  "name": "floyd",
+  "private": true,
+  "version": "0.1.0",
+  "description": "FLOYD workstation — Floyd Core durable authority + managed OpenCode engine",
+  "type": "module",
+  "engines": {
+    "node": ">=26"
+  },
+  "scripts": {
+    "typecheck": "tsc -b packages/contracts core/daemon clients/cli",
+    "test": "node --test \"core/daemon/test/*.test.ts\"",
+    "core": "node core/daemon/src/main.ts",
+    "cli": "node clients/cli/src/main.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "typescript": "^5.9.0"
+  }
+}

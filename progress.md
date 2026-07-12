@@ -159,3 +159,48 @@
 | What is the goal? | One evidence-backed implementation plan for a persistent, unified FLOYD workstation ecosystem |
 | What have I learned? | One Floyd authority plus managed OpenCode and many focused surfaces is the coherent path; the public website and legacy runtimes must stay outside that trust boundary |
 | What have I done? | Inspected and adjudicated the full named estate, verified key lineage/runtime facts, and wrote the official architecture and migration blueprint |
+
+## Session: 2026-07-11/12 — FABLE5 golden path implementation
+
+### Phase I1 (env verification + pin): complete
+- OpenCode 1.17.15 pinned in `upstream.lock` (sha256 7bdefaea…); PATH `opencode` symlink repointed from SuperFloyd binary to real 1.17.15 with Douglas's explicit authorization; superfloyd chain untouched.
+- Isolation empirically proven: XDG+OPENCODE_CONFIG confine all engine state under FLOYD_RUNTIME; global opencode.db/auth.json mtimes unchanged.
+- GLM key vends from `omp auth-broker token zai` (exit 0); interim secrets file deleted; credential_ref = omp-auth-broker:zai.
+
+### Phase I2/I3 (scaffold + contracts + persistence): complete
+- pnpm workspace: packages/contracts, core/daemon, clients/cli, apps/cockpit. Zero runtime deps (node:sqlite, native TS on Node 26); typescript+@types/node dev-only.
+- SQLite WAL at FLOYD_RUNTIME/core/floyd.db (0600): projects/sessions/runs/jobs/leases/artifacts/agent_specs/provider_profiles/evidence_events.
+- Evidence append-only enforced by SQLite triggers; lease exclusivity by partial unique index; CAS artifacts under FLOYD_RUNTIME/artifacts.
+- `node --test`: 5/5 pass (append-only, lease conflict, CAS, idempotent submission, payload parsing). `tsc -b`: clean.
+
+### Phase I4 (managed engine): complete
+- Core spawns pinned binary by absolute path after sha256 re-verification, --pure, loopback 41415, minimal PATH env, broker-fed key in env only.
+- Gateway on 127.0.0.1:41414 with 0600 bearer token; CLI + cockpit surfaces attach to same state.
+
+### Phase I5 (golden path): in progress
+- scratch-calc project created at FLOYD_RUNTIME/projects/scratch-calc (median tests failing at baseline, commit fa25f00).
+- Run run_mrh89sxa0aa9e039a433 submitted. First attempt failed: engine wraps responses in {data:...} envelope — adapter fixed, retry endpoint added, core restarted (recovery marked prior jobs interrupted), run retrying.
+
+### Errors Encountered (implementation)
+| Error | Attempt | Resolution |
+|---|---|---|
+| `node --test core/daemon/test/` MODULE_NOT_FOUND | 1 | Use explicit glob `"core/daemon/test/*.test.ts"` |
+| TS2688 missing node types | 1 | Added @types/node dev dep |
+| TS2352 JobRow casts | 1 | `as unknown as JobRow` |
+| engine session create "no id" | 1 | 1.17.15 wraps all JSON in {data:…}; adapter unwraps envelope |
+
+### Phase I5 progress (attempt 4, in flight)
+- ModelUnavailable chain solved: {data} envelope → glm-4.6 catalog drift → integration-connection auth (ZHIPU_API_KEY env). ADR-001 records all four seam corrections.
+- Broker zai credential proven stale (401 at api.z.ai coding endpoint); config key proven valid (200). Core validates broker-first, falls back with evidence (engine.started.credential_source), fails closed otherwise.
+- waitIdle rebuilt as completion-polling (POST /wait is 503 in this build).
+- Recovery re-prompt path implemented and exercised live: reattach with prior_assistant_turn=false → set model → re-prompt (evidence engine.prompt.resubmitted). No duplicate action possible once an assistant turn exists.
+- Builder (glm-5.2) wrote correct median() in leased worktree job_mrh89sxa…; run continuing to diff/test/review.
+- Cockpit verified over HTTP: serves at gateway, 401 without token, same project/run/lease IDs as CLI. Visual browser check NOT done (extension disconnected).
+
+### Phases I5–I8: complete (runtime-verified)
+- Golden path executed end-to-end on run_mrh89sxa0aa9e039a433: builder (glm-5.2, leased worktree) → diff 43348f4b… → tests 4/4 (exit 0) → reviewer (separate session+worktree) "VERDICT: approve" → waiting_review → explicit accept → merge 8c45c8d → 4/4 tests on main → leases released → memory item stored with source attribution.
+- Restart proof: identical durable state before/after kill+relaunch (diff of snapshots empty); only lifecycle evidence added; no duplicate action.
+- Dual surface: CLI and cockpit gateway return identical project/session/run/artifact IDs; API 401 without token; SSE live.
+- TDD adopted mid-session per Douglas: engine-logic predicates + memory built test-first. Final: tsc clean, 14/14 unit tests.
+- Handback: docs/HANDBACK-2026-07-12-golden-path.md (ten proofs + blunt unavailable list). ADR-001/ADR-002 record corrections.
+- Honest gap: engine permission asks never fired in server mode — Floyd gate wired but unexercised; top follow-up.

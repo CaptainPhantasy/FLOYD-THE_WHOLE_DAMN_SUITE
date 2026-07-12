@@ -515,3 +515,24 @@ External research sources reviewed as data:
 - Public brand/API boundary: `https://www.floydslabs.com/`.
 - Organization boundary: `https://github.com/LegacyAI-FloydsLabs`.
 - Provider billing semantics: `https://docs.z.ai/devpack/faq`, `https://docs.z.ai/devpack/usage-policy`, `https://platform.minimax.io/docs/token-plan/quickstart`, `https://platform.minimax.io/docs/token-plan/faq`.
+
+## Implementation Session 2026-07-11 — Environment Facts (all [EXECUTED]/[OBSERVED] this session)
+
+- **PATH footgun:** `/opt/homebrew/bin/opencode` is a symlink to `~/.opencode/bin/opencode-superfloyd` (reports "SuperFloyd v1.0"). Interactive zsh resolves `~/.opencode/bin/opencode` (1.17.15) first, non-interactive shells resolve the SuperFloyd binary. Floyd Core MUST spawn OpenCode by absolute path `/Users/douglastalley/.opencode/bin/opencode`.
+- **Upstream pin:** OpenCode 1.17.15, sha256 `7bdefaeaef5cc4f661988eaba00de047f5f65547fd22a3bed5ba7c4d86a275d3`.
+- **Isolation verified:** with `XDG_DATA_HOME/XDG_CONFIG_HOME/XDG_CACHE_HOME/XDG_STATE_HOME` + `OPENCODE_CONFIG` pointed under `/Volumes/Storage/FLOYD_RUNTIME/engines/opencode/`, `opencode serve --pure` wrote only Floyd-owned paths; global `~/.local/share/opencode/{opencode.db,auth.json}` mtimes unchanged.
+- **Server API (from live /doc):** `POST /api/session {location:{directory}}` binds a session to a directory (worktree lease seam); `POST /api/session/{id}/prompt {prompt:{text},delivery:steer|queue}`; `GET /api/session/{id}/wait`; permission requests replied via `POST /api/session/{id}/permission/{requestID}/reply {reply}`; SSE at `/event`. `disabled_providers:["opencode"]` removes the unapproved bundled provider (verified: only `zai-coding-plan` remains). `permission:{edit:ask,bash:ask,webfetch:ask}` honored (verified via /config).
+- **Env vars honored by 1.17.15 binary:** `OPENCODE_CONFIG`, `OPENCODE_CONFIG_DIR`, `OPENCODE_AUTH_CONTENT`, `OPENCODE_SERVER_USERNAME/PASSWORD`, `OPENCODE_DISABLE_AUTOUPDATE`, `OPENCODE_PERMISSION`, XDG overrides.
+- **Credential broker:** `omp auth-broker` (v16.3.6) serves at `http://127.0.0.1:17384`; provider id `zai` = "Z.AI (GLM Coding Plan)"; `omp auth-broker token zai` exits 0 (token never displayed). Floyd Core fetches this in-process at engine spawn; interim `/Volumes/Storage/FLOYD_RUNTIME/secrets/glm.env` deleted.
+- **User global opencode.json embeds the GLM key in plaintext** at `~/.config/opencode/opencode.json` (also inside four MCP server blocks). Hardening follow-on, not touched this session.
+- **MiniMax region answered:** auth label `minimax-cn-coding-plan` exists in global opencode auth.json → China-domain plan. Out of golden-path scope.
+- **Runtimes:** Node v26.0.0, pnpm 10.25.0 at /opt/homebrew/bin. `/Volumes/Storage/FLOYD_RUNTIME` exists, 0700, douglastalley.
+
+## OpenCode 1.17.15 seam facts (live-verified 2026-07-12, see ADR-001)
+
+- All JSON endpoints wrap payloads in `{data:...}`.
+- `POST /api/session/{id}/wait` → 503 "not available yet" in this build; idle detection = completed-assistant + no pending permissions + 3 stable polls.
+- Model availability = **integration connection**, not config apiKey / PUT /auth. `zai*` integrations connect via `ZHIPU_API_KEY` env. Without it: `ModelUnavailableError` on every turn.
+- GLM Coding Plan live catalog: glm-4.7, glm-5.1, glm-5.2, glm-5v-turbo, glm-5-turbo, glm-4.5-air. **glm-4.6 no longer exists** — blueprint and Douglas's global opencode config both stale on this.
+- `omp auth-broker token zai` → HTTP 401 at api.z.ai coding endpoint; user's config key → HTTP 200. Core validates broker-first, falls back with evidence, fails closed otherwise.
+- Session recovery contract implemented: reattach + observe if an assistant turn exists; set model + re-prompt (evidenced) when the action never started.

@@ -1,0 +1,10 @@
+{
+  "opencode": {
+    "version": "1.17.15",
+    "binary_path": "/Users/douglastalley/.opencode/bin/opencode",
+    "sha256": "7bdefaeaef5cc4f661988eaba00de047f5f65547fd22a3bed5ba7c4d86a275d3",
+    "arch": "arm64-darwin",
+    "pinned_at": "2026-07-11T23:05:00-04:00",
+    "notes": "Managed loopback child only. Floyd Core verifies this hash before every spawn and fails closed on mismatch. Never resolved via PATH."
+  }
+}

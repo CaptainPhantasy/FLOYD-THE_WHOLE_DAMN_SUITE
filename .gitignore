@@ -15,3 +15,5 @@ artifacts/
 runtime/
 tmp/
 
+*.tsbuildinfo
+dist-types/

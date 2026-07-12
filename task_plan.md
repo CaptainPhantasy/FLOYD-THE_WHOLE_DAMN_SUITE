@@ -257,6 +257,59 @@ Race prevention rules:
 - Create the canonical repository private under `LegacyAI-FloydsLabs`; current organization and personal repositories are public provenance/products and remain unchanged by this plan.
 - Use GLM and MiniMax subscription-backed integration where officially supported; distinguish it mechanically from metered API credentials and never silently double-bill through fallback.
 
+## Implementation Session — 2026-07-11 (FABLE5 golden path)
+
+Goal: execute `FABLE5_HANDOFF.md` — one Floyd Core + one managed OpenCode 1.17.15
+child, GLM Coding Plan route, worktree-leased coding action, reviewer gate,
+dual-surface (CLI + Cockpit) attach, restart proof, evidence ledger.
+
+### Phase I1: Environment verification and upstream pin
+
+- [x] Verify Node/pnpm compatibility for strict TypeScript workspace.
+- [x] Fingerprint pinned OpenCode 1.17.15 binary (path, sha256) into `upstream.lock`.
+- [x] Empirically verify OpenCode config/data isolation env vars (`OPENCODE_CONFIG`, XDG overrides) without touching global state.
+- **Status:** complete
+
+### Phase I2: Workspace scaffold
+
+- [x] pnpm workspace: `packages/contracts`, `core/daemon`, `engines/opencode`, `clients/cli`, `apps/cockpit`, `tests`.
+- **Status:** complete
+
+### Phase I3: Contracts and persistence
+
+- [x] Typed contracts: ActionRequest, ActionObservation, Run, Job, Lease, Artifact, EvidenceEvent, AgentSpec, ProviderProfile.
+- [x] SQLite WAL store under `/Volumes/Storage/FLOYD_RUNTIME` (0700/0600), append-only evidence, idempotency keys.
+- **Status:** complete
+
+### Phase I4: Managed OpenCode supervisor and adapter
+
+- [x] Spawn pinned binary by absolute path (PATH `opencode` is a SuperFloyd symlink — never resolve via PATH).
+- [x] Floyd-owned isolated config/data dirs; GLM key via env substitution, never committed.
+- [x] `--pure` until Floyd plugin is tested; loopback only; route receipt before first model call.
+- **Status:** complete
+
+### Phase I5: Golden path execution
+
+- [x] Scratch project + worktree lease; builder coding task via GLM; diff + test evidence.
+- [x] Reviewer agent on separate session consuming the diff; explicit accept/reject gate.
+- **Status:** complete
+
+### Phase I6: CLI and Cockpit surfaces
+
+- [x] CLI attach showing same project/session/run/artifact IDs.
+- [x] Cockpit web surface reading same Core state (CodeNomad adoption deferred, recorded as ADR).
+- **Status:** complete
+
+### Phase I7: Restart and idempotency proof
+
+- [x] Restart Core + OpenCode; reattach; same durable IDs; no duplicate coding action.
+- **Status:** complete
+
+### Phase I8: Evidence ledger, commit, handback
+
+- [x] Ten-item handback evidence, footguns, professional advice; commit.
+- **Status:** complete
+
 ## Plan Maintenance
 
 - Re-read this file before implementation and cutover decisions.
