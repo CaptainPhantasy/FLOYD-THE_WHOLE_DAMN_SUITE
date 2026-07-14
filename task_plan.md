@@ -373,8 +373,12 @@ and physical/external proof remain separate truth states.
 - [x] Re-run visible integrated-shell acceptance against every admitted browser
   copy after the final pinned restart; structural or blank-frame proof does not
   satisfy this item.
-- [ ] Prove the QR/deep-link flow from a second physical tailnet device and
-  revoke the resulting device session.
+- [x] Prove the QR/deep-link flow from a second physical tailnet device and
+  revoke the resulting device session. A fresh one-time handoff was opened by
+  Chrome 150 on the physical tailnet MacBook Air, the remote Cockpit loaded
+  Core state plus the admitted surface inventory, Floyd Desktop rendered inside
+  the integrated shell, the HttpOnly session remained unavailable to browser
+  JavaScript, logout returned 200, and the next state request returned 401.
 - [ ] Exercise one real provider OAuth callback/refresh/revoke lifecycle; mock
   provider coverage remains implementation proof, not external-provider proof.
 - [x] Resolve the remote application boundary with four Core-owned,
