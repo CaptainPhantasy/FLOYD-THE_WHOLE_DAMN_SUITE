@@ -294,6 +294,9 @@ export class ConnectedAppAuthorityService {
     authorization.searchParams.set("code_challenge_method", "S256");
     authorization.searchParams.set("code_challenge", createHash("sha256").update(verifier).digest("base64url"));
     authorization.searchParams.set("resource", resourceAudience(profile.resource_url));
+    // Notion's documented custom-client flow requires an explicit consent
+    // prompt. Other OAuth servers safely ignore the standard parameter.
+    authorization.searchParams.set("prompt", "consent");
     const scopes = JSON.parse(profile.scopes_json) as string[];
     if (scopes.length) authorization.searchParams.set("scope", scopes.join(" "));
     this.db.exec("BEGIN IMMEDIATE");
@@ -418,6 +421,7 @@ export class ConnectedAppAuthorityService {
             headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
             body: form,
             signal: combinedSignal(signal),
+            redirect: "error",
           });
           statuses.push(response.status);
           await response.body?.cancel().catch(() => {});
@@ -650,9 +654,14 @@ export class ConnectedAppAuthorityService {
     try {
       response = await this.#fetch(url, {
         method: "POST",
-        headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+          accept: "application/json",
+          "user-agent": "Floyd-Workstation/1.0",
+        },
         body: form,
         signal: combinedSignal(signal),
+        redirect: "error",
       });
     } catch (error) {
       throw new ConnectedAppAuthorityError(

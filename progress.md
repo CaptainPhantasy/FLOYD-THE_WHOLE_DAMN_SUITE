@@ -437,3 +437,31 @@ scope reduction or a deferral of the connected-application experience.
   initial envelope restore completed. It now waits for `experienceReady` and
   refreshes the Core envelope before showing cards, preventing a valid run from
   appearing as a stale project-only continuation.
+
+## Connected applications in the portable experience — 2026-07-14
+
+- Added `connected_app_ids` to the Core-owned envelope with legacy hydration,
+  profile validation, stable sorting/deduplication, optimistic revision checks,
+  and preservation across restart.
+- Handoffs carry an immutable selected-app snapshot and only
+  `connected_app:read` / `connected_app:invoke` authority. Remote continuations
+  can inspect and invoke the selected set but cannot expand it or manage OAuth.
+- Added a zero-dependency Core MCP transport: exact HTTPS resource pinning,
+  private lifecycle/session headers, JSON and SSE parsing, exact upstream error
+  propagation with credential redaction, abort propagation, response-reader
+  cancellation, and bounded session DELETE cleanup.
+- Added matching typed/browser SDK invocation and a Cockpit selection control.
+  Local Cockpit can select apps; remote Cockpit shows the immutable selection
+  read-only. Credentials remain Core-only opaque references.
+- Full canonical verification passed: 151/151 tests, TypeScript project
+  references, active-surface provenance/runtime verification, and
+  `git diff --check` all exited zero.
+- Restarted launchd-owned Core PID 66588. Health returned HTTP 200 with managed
+  OpenCode PID 66621; all four browser surfaces reported verified. The live
+  Notion grant was selected at envelope revision 744, initialized MCP, and
+  returned `tools/list` with HTTP 200. It was deselected at revision 745,
+  revoked upstream with HTTP 200, and then reported durable status `revoked`.
+  The temporary secret-bearing OAuth-start file was deleted.
+- Fresh rendered reinspection is blocked: both the computer-use and Chrome
+  control paths failed at their shared closed browser transport. No headless or
+  source-only result is being represented as visual proof.

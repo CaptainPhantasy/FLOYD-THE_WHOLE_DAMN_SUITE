@@ -16,6 +16,7 @@ Envelope schema version `1.0.0` contains:
 - pending questions and permissions hydrated from the active engine session;
 - unsent composer draft;
 - selected artifact and view;
+- selected connected-application IDs, never their credentials;
 - negotiated surface SDK version and capabilities;
 - update revision, timestamp, and device attribution.
 
@@ -33,6 +34,9 @@ Model-provider credentials and connected-application credentials are separate
 authorities. OpenCode Zen/Go, OpenAI, and Anthropic use the model connector
 store and cannot receive an MCP token. Remote MCP applications use the
 connected-app authority and cannot be selected by the model gateway.
+Connected-application selection is an optimistic envelope mutation. Core
+validates every selected ID against a durable connected-app profile, sorts and
+deduplicates the list, and carries only those IDs into a handoff snapshot.
 Changing the active session or run automatically clears pending asks, selected
 artifact, cursor, event ID, and per-surface replay positions. Selected
 artifacts must belong to the active run.
@@ -51,6 +55,9 @@ artifacts must belong to the active run.
 - `POST /api/handoffs/consume`
 - `POST /api/handoffs/pair`
 - `DELETE /api/handoffs/{id}`
+- `GET /api/connected-apps`
+- `POST /api/connected-apps/{id}/invoke`
+- `DELETE /api/connected-apps/{id}`
 
 The initial canonical envelope ID is `primary`. The stream uses the envelope
 revision as its SSE ID. Reconnecting surfaces send `Last-Event-ID`, fetch the
@@ -102,7 +109,10 @@ Permanent device credentials exchange for a default health-only session.
 Native handoff consumption atomically issues a session whose scopes are the
 intersection of the device grant and handoff grant and whose resources are
 bound to an immutable snapshot of the envelope's active project, session, run,
-and current artifacts. Browser pairing instead consumes the one-time token at
+current artifacts, and selected connected-application IDs. Handoff sessions
+may receive `connected_app:read` and `connected_app:invoke`; they never receive
+connected-app creation, OAuth, refresh, selection, or revocation authority.
+Browser pairing instead consumes the one-time token at
 the exact configured private HTTPS origin, creates a transient device, and
 returns only a short-lived Secure, HttpOnly, SameSite=Strict session cookie.
 The enrollment secret and session token never enter browser JavaScript.
@@ -141,6 +151,27 @@ contexts bound to the connected-app ID, issuer, and exact resource URL. Refresh
 is serialized and rotating refresh tokens are replaced atomically. Disconnect
 revokes the refresh token before the access token and erases local ciphertext
 even when upstream revocation is uncertain.
+
+MCP credentials are resolved only inside Core from
+`floyd-connected-app:<id>` references. Core pins the HTTPS resource URL,
+canonicalizes Bearer authentication, refuses redirects, performs the MCP
+initialize/initialized handshake itself, and retains the session ID privately.
+JSON and SSE replies are bounded and matched to the caller's JSON-RPC ID. A
+browser disconnect, device-session revocation, app revocation, or normal
+completion aborts/cancels the upstream body and sends a bounded MCP session
+DELETE when a session was established. Upstream HTTP status and error content
+are preserved after credential redaction.
+
+The sharp edge is deliberate for the current single-developer baseline:
+selection grants the receiving handoff permission to invoke any MCP method the
+connected application exposes, including methods that can write or delete
+remote data. Core blocks callers from spoofing the lifecycle handshake, but it
+does not yet implement per-tool read/write policy, interactive confirmation,
+or semantic argument inspection. A selected app is therefore a broad delegated
+capability for that app, not a read-only bookmark. Remove it from the envelope
+before issuing a handoff, revoke the device session, or revoke the app to cut
+off that authority. Upstream revocation may also be best-effort; Floyd erases
+its local ciphertext even if a provider fails to confirm invalidation.
 
 ## Completion boundary
 

@@ -20,6 +20,8 @@ const MAX_STRING_LENGTH = 16_384;
 const MAX_DRAFT_LENGTH = 262_144;
 const MAX_INTERACTIONS = 1_000;
 const MAX_INTERACTIONS_JSON_BYTES = 1_048_576;
+const MAX_CONNECTED_APPS = 100;
+const CONNECTED_APP_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const ALLOWED_CREDENTIAL_REF_SCHEMES = new Set(["env", "keychain", "omp-auth-broker", "secret", "vault"]);
 
 export class ExperienceValidationError extends Error {
@@ -151,6 +153,26 @@ function validateBaseUrl(value: string | null): void {
   if (parsed.username || parsed.password) validation("model_route.base_url may not contain credentials");
 }
 
+function canonicalConnectedAppIds(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length > MAX_CONNECTED_APPS) {
+    validation(`connected_app_ids must be an array of at most ${MAX_CONNECTED_APPS} connected app IDs`);
+  }
+  const ids = value.map((id) => {
+    if (typeof id !== "string" || !CONNECTED_APP_ID.test(id)) validation("connected_app_ids contains an invalid connected app ID");
+    return id;
+  });
+  return [...new Set(ids)].sort();
+}
+
+function validateConnectedAppReferences(db: Db, ids: string[]): void {
+  if (ids.length === 0) return;
+  const placeholders = ids.map(() => "?").join(",");
+  const rows = db.prepare(`SELECT id FROM connected_app_profiles WHERE id IN (${placeholders})`).all(...ids) as Array<{ id: string }>;
+  const existing = new Set(rows.map((row) => row.id));
+  const missing = ids.find((id) => !existing.has(id));
+  if (missing) validation(`connected_app_ids references connected app ${missing}, which does not exist`);
+}
+
 function parseSemver(value: string): [number, number, number] | null {
   const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?$/.exec(value);
   return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : null;
@@ -198,6 +220,7 @@ export function createDefaultExperienceEnvelope(id = DEFAULT_EXPERIENCE_ENVELOPE
     revision: 0,
     active: { project_id: null, session_id: null, run_id: null },
     model_route: { provider: null, model: null, base_url: null, provider_profile_id: null, credential_ref: null },
+    connected_app_ids: [],
     transcript_cursor: 0,
     transcript_epoch: null,
     last_event_id: null,
@@ -221,6 +244,7 @@ function hydrate(row: ExperienceRow): ExperienceEnvelope {
   }
   return {
     ...payload,
+    connected_app_ids: canonicalConnectedAppIds(payload.connected_app_ids ?? []),
     transcript_epoch: payload.transcript_epoch ?? null,
     surfaces: Object.fromEntries(Object.entries(payload.surfaces ?? {}).map(([surfaceId, surface]) => [
       surfaceId,
@@ -330,7 +354,7 @@ function validateSurface(surface: SurfaceExperienceState, previous?: SurfaceExpe
 function validatePatchShape(patch: ExperienceEnvelopeMutation): void {
   assertPlainObject(patch, "experience patch");
   assertOnlyKeys(patch as unknown as Record<string, unknown>, [
-    "expected_revision", "active", "model_route", "transcript_cursor", "transcript_epoch", "last_event_id", "pending_questions",
+    "expected_revision", "active", "model_route", "connected_app_ids", "transcript_cursor", "transcript_epoch", "last_event_id", "pending_questions",
     "pending_permissions", "composer_draft", "selected_artifact_id", "selected_view", "surface", "device_id",
   ], "experience patch");
   assertNonNegativeInteger(patch.expected_revision, "expected_revision");
@@ -375,6 +399,11 @@ function mergePatch(db: Db, current: ExperienceEnvelope, patch: ExperienceEnvelo
 
   const modelRoute = { ...current.model_route, ...patch.model_route };
   validateModelRoute(db, modelRoute);
+
+  const connectedAppIds = patch.connected_app_ids === undefined
+    ? current.connected_app_ids
+    : canonicalConnectedAppIds(patch.connected_app_ids);
+  if (patch.connected_app_ids !== undefined) validateConnectedAppReferences(db, connectedAppIds);
 
   const transcriptEpoch = patch.transcript_epoch === undefined
     ? (activeSessionChanged ? null : current.transcript_epoch)
@@ -442,6 +471,7 @@ function mergePatch(db: Db, current: ExperienceEnvelope, patch: ExperienceEnvelo
     revision: current.revision + 1,
     active,
     model_route: modelRoute,
+    connected_app_ids: connectedAppIds,
     transcript_cursor: transcriptCursor,
     transcript_epoch: transcriptEpoch,
     last_event_id: lastEventId,

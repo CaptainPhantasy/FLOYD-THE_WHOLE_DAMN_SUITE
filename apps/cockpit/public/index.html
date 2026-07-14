@@ -889,6 +889,7 @@ async function completeOAuthCallback() {
 
 function renderConnectedAppsSettings({ publish = true } = {}) {
   el("inspectStatus").textContent = "Connected applications";
+  const selected = new Set(app.envelope?.connected_app_ids || []);
   const connectionRows = app.connectedApps.map((profile) => `
     <div class="inspect-section" data-connected-app-id="${escapeHtml(profile.id)}">
       <div class="inspect-label">${escapeHtml(profile.displayName)}</div>
@@ -896,22 +897,23 @@ function renderConnectedAppsSettings({ publish = true } = {}) {
       <div class="inspect-row"><span>Resource</span><code title="${escapeHtml(profile.resourceUrl)}">${escapeHtml(profile.resourceUrl)}</code></div>
       <div class="inspect-row"><span>Issuer</span><code title="${escapeHtml(profile.issuer)}">${escapeHtml(profile.issuer)}</code></div>
       <div class="inspect-row"><span>Scopes</span><code>${escapeHtml((profile.scopesGranted.length ? profile.scopesGranted : profile.scopesRequested).join(" ") || "provider default")}</code></div>
-      <div class="event-actions">
+      <label class="settings-field"><span>Portable experience</span><input type="checkbox" data-connected-app-select="${escapeHtml(profile.id)}" ${selected.has(profile.id) ? "checked" : ""} ${remoteMode ? "disabled" : ""}></label>
+      ${remoteMode ? '<div class="settings-note">This application was selected when the handoff was issued. Remote continuation can use it but cannot expand its authority.</div>' : `<div class="event-actions">
         <button class="action-button primary" type="button" data-connected-app-authorize="${escapeHtml(profile.id)}">${profile.status === "connected" ? "Reconnect" : "Connect"}</button>
         <button class="action-button" type="button" data-connected-app-refresh="${escapeHtml(profile.id)}" ${profile.status === "connected" ? "" : "disabled"}>Refresh token</button>
         <button class="action-button danger" type="button" data-connected-app-revoke="${escapeHtml(profile.id)}" ${profile.status === "connected" || profile.status === "revocation_pending" ? "" : "disabled"}>Disconnect</button>
-      </div>
+      </div>`}
     </div>`).join("");
   el("inspectorBody").innerHTML = `
     ${connectionRows || '<div class="inspect-section"><div class="inspect-label">No connected applications</div><div class="settings-note">Add a remote MCP application below. Core performs OAuth discovery, PKCE, token refresh, and revocation; tokens never enter this page.</div></div>'}
-    <div class="inspect-section"><div class="inspect-label">Add remote MCP application</div>
+    ${remoteMode ? "" : `<div class="inspect-section"><div class="inspect-label">Add remote MCP application</div>
       <label class="settings-field"><span>ID</span><input id="connectedAppId" value="notion" autocomplete="off"></label>
       <label class="settings-field"><span>Name</span><input id="connectedAppName" value="Notion" autocomplete="off"></label>
       <label class="settings-field"><span>MCP resource URL</span><input id="connectedAppUrl" value="https://mcp.notion.com/mcp" autocomplete="off"></label>
       <label class="settings-field"><span>OAuth scopes (optional)</span><input id="connectedAppScopes" autocomplete="off"></label>
       <button class="action-button" type="button" data-connected-app-create>Discover application</button>
       <div class="settings-note">Connected-app OAuth is separate from model routing. Core discovers and pins the resource, issuer, endpoints, and client registration before authorization.</div>
-    </div>`;
+    </div>`}`;
   if (publish && !app.restoringEnvelope) patchEnvelope({ selected_view: "connected-apps" }).catch(notify);
 }
 
@@ -1429,6 +1431,18 @@ el("messages").addEventListener("click", async (event) => {
   } catch (error) { notify(error); }
 });
 el("inspectorBody").addEventListener("click", async (event) => {
+  const selectConnectedApp = event.target.closest("[data-connected-app-select]");
+  if (selectConnectedApp) {
+    if (remoteMode) return;
+    try {
+      const next = new Set(app.envelope?.connected_app_ids || []);
+      if (selectConnectedApp.checked) next.add(selectConnectedApp.dataset.connectedAppSelect);
+      else next.delete(selectConnectedApp.dataset.connectedAppSelect);
+      await patchEnvelope({ connected_app_ids: [...next].sort() });
+      renderConnectedAppsSettings({ publish: false });
+    } catch (error) { notify(error); }
+    return;
+  }
   if (event.target.closest("[data-connected-app-create]")) {
     try {
       await client.createConnectedApp({
@@ -1673,7 +1687,7 @@ el("surfaceGrid").addEventListener("click", async (event) => {
   } catch (error) { notify(error); }
 });
 el("modelSettings").addEventListener("click", () => remoteMode ? notify(new Error("Provider settings require the local authority surface.")) : openModelSettings().catch(notify));
-el("connectedApps").addEventListener("click", () => remoteMode ? notify(new Error("Connected-application management requires the local authority surface.")) : openConnectedApps().catch(notify));
+el("connectedApps").addEventListener("click", () => openConnectedApps().catch(notify));
 el("modeButton").addEventListener("click", () => {
   if (remoteMode) return;
   if (app.mode === "model") { startNewTask(); return; }
@@ -1697,7 +1711,7 @@ setInterval(refreshHealth, 5000);
 app.refreshTimer = setInterval(() => refreshState(), 3500);
 if (remoteMode) {
   el("boundaryLabel").textContent = "Private remote continuation";
-  for (const id of ["newTask", "modelSettings", "connectedApps", "shareHandoff", "acceptRun", "rejectRun", "escalateRun"]) el(id).disabled = true;
+  for (const id of ["newTask", "modelSettings", "shareHandoff", "acceptRun", "rejectRun", "escalateRun"]) el(id).disabled = true;
   el("modeButton").disabled = true;
 }
 async function confirmRemoteDeviceSession() {

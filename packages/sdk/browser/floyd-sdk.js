@@ -207,6 +207,10 @@ export class FloydBrowserClient {
     return this.request("DELETE", `/api/connected-apps/${encodeURIComponent(connectedAppId)}`, undefined, signal);
   }
 
+  invokeConnectedApp(connectedAppId, request, signal) {
+    return this.request("POST", `/api/connected-apps/${encodeURIComponent(connectedAppId)}/invoke`, request, signal);
+  }
+
   /** Stream one user-configured provider through Core's normalized relay. */
   async *modelStream({ provider, apiKey, credentialRef, baseUrl, anthropicVersion, model, messages, signal }) {
     if (Boolean(apiKey) === Boolean(credentialRef)) {

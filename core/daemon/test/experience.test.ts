@@ -21,6 +21,8 @@ const {
 } = await import("../src/experience.ts");
 
 const db = openDb(join(runtimeRoot, "core", "experience.db"));
+db.exec(`CREATE TABLE connected_app_profiles (id TEXT PRIMARY KEY)`);
+db.prepare(`INSERT INTO connected_app_profiles (id) VALUES ('app-a'), ('app-b')`).run();
 db.prepare(
   `INSERT INTO projects (id, name, root_path, repo_path, test_command, created_at)
    VALUES ('prj_a', 'project-a', '/tmp/a', '/tmp/a', 'true', '2026-07-14T00:00:00.000Z'),
@@ -55,11 +57,22 @@ test("creates and reads the deterministic default envelope with audit evidence",
   assert.equal(envelope.schema_version, "1.0.0");
   assert.equal(envelope.revision, 0);
   assert.deepEqual(envelope.active, { project_id: null, session_id: null, run_id: null });
+  assert.deepEqual(envelope.connected_app_ids, []);
   assert.deepEqual(envelope.surfaces, {});
   assert.deepEqual(getExperienceEnvelope(db), envelope);
   const event = db.prepare(`SELECT type, payload_json FROM evidence_events WHERE type = 'experience.envelope.created'`).get() as { type: string; payload_json: string };
   assert.equal(event.type, "experience.envelope.created");
   assert.equal(JSON.parse(event.payload_json).envelope_id, "primary");
+});
+
+test("hydrates legacy envelopes with an empty connected-app selection", () => {
+  const legacy = ensureExperienceEnvelope(db, "legacy-connected-apps");
+  const payload = { ...legacy } as Partial<typeof legacy>;
+  delete payload.connected_app_ids;
+  db.prepare(`UPDATE experience_envelopes SET payload_json = ? WHERE id = ?`)
+    .run(JSON.stringify(payload), legacy.id);
+
+  assert.deepEqual(getExperienceEnvelope(db, legacy.id)?.connected_app_ids, []);
 });
 
 test("validates project, session, and run as one referentially consistent context", () => {
@@ -301,4 +314,25 @@ test("rejects cursor regression and dangling artifact references", () => {
       last_event_id: null,
     },
   }), (error: unknown) => error instanceof ExperienceValidationError && /must match/.test(error.message));
+});
+
+test("validates, canonicalizes, and preserves connected-app selections", () => {
+  const before = getExperienceEnvelope(db)!;
+  const selected = updateExperienceEnvelope(db, "primary", {
+    expected_revision: before.revision,
+    connected_app_ids: ["app-b", "app-a", "app-a"],
+  });
+  assert.deepEqual(selected.connected_app_ids, ["app-a", "app-b"]);
+
+  const preserved = updateExperienceEnvelope(db, "primary", {
+    expected_revision: selected.revision,
+    selected_view: "connected-app-selection-preserved",
+  });
+  assert.deepEqual(preserved.connected_app_ids, ["app-a", "app-b"]);
+
+  assert.throws(() => updateExperienceEnvelope(db, "primary", {
+    expected_revision: preserved.revision,
+    connected_app_ids: ["missing-app"],
+  }), (error: unknown) => error instanceof ExperienceValidationError && /missing-app.*does not exist/.test(error.message));
+  assert.deepEqual(getExperienceEnvelope(db)!.connected_app_ids, ["app-a", "app-b"]);
 });

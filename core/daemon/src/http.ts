@@ -28,6 +28,7 @@ import { classifyEngineEvent, SessionBuffer } from "./session-channel.ts";
 import { relayProviderRequest } from "./provider-gateway.ts";
 import { ConnectorAuthorityError, ConnectorAuthorityService } from "./connector-authority.ts";
 import { ConnectedAppAuthorityError, ConnectedAppAuthorityService } from "./connected-app-authority.ts";
+import { ConnectedAppTransport, ConnectedAppTransportError } from "./connected-app-transport.ts";
 import { renderQrSvg } from "./qr.ts";
 import {
   ExperienceConflictError,
@@ -213,6 +214,40 @@ type RemotePrincipal = ReturnType<ExperienceSecurityService["authenticateDeviceS
 const remoteStreams = new Map<string, Set<ServerResponse>>();
 const remoteSurfaceSockets = new Map<string, Set<Duplex>>();
 const remoteSurfaceRequests = new Map<string, Set<AbortController>>();
+const connectedAppRequests = new Map<string, Set<AbortController>>();
+
+function registerConnectedAppRequest(connectedAppId: string, signals: readonly AbortSignal[]): { signal: AbortSignal; finish: () => void } {
+  const requests = connectedAppRequests.get(connectedAppId) ?? new Set<AbortController>();
+  if (requests.size >= 8) throw new ExperienceSecurityError("scope_denied", "connected app request limit exceeded", 429);
+  const controller = new AbortController();
+  const relayAbort = (signal: AbortSignal) => controller.abort(signal.reason ?? new Error("connected app request aborted"));
+  const listeners = signals.map((signal) => {
+    const listener = () => relayAbort(signal);
+    if (signal.aborted) listener();
+    else signal.addEventListener("abort", listener, { once: true });
+    return { signal, listener };
+  });
+  requests.add(controller);
+  connectedAppRequests.set(connectedAppId, requests);
+  let finished = false;
+  return {
+    signal: controller.signal,
+    finish: () => {
+      if (finished) return;
+      finished = true;
+      for (const { signal, listener } of listeners) signal.removeEventListener("abort", listener);
+      requests.delete(controller);
+      if (requests.size === 0) connectedAppRequests.delete(connectedAppId);
+    },
+  };
+}
+
+function abortConnectedAppRequests(connectedAppId: string): void {
+  for (const controller of connectedAppRequests.get(connectedAppId) ?? []) {
+    controller.abort(new Error("connected app disconnected"));
+  }
+  connectedAppRequests.delete(connectedAppId);
+}
 
 function registerRemoteStream(res: ServerResponse, principal: RemotePrincipal): void {
   const current = remoteStreams.get(principal.sessionId) ?? new Set<ServerResponse>();
@@ -310,6 +345,11 @@ function requireRemoteEnvelopeContext(principal: RemotePrincipal | null, envelop
     if ((current === null && allowed.length !== 0) || (current !== null && !allowed.includes(current))) {
       throw new ExperienceSecurityError("scope_denied", "experience context moved outside the device session grant", 403);
     }
+  }
+  const selectedConnectedApps = envelope.connected_app_ids ?? [];
+  if (selectedConnectedApps.length !== principal.resources.connected_app_ids.length
+    || selectedConnectedApps.some((id) => !principal.resources.connected_app_ids.includes(id))) {
+    throw new ExperienceSecurityError("scope_denied", "connected-application selection moved outside the device session grant", 403);
   }
 }
 
@@ -635,6 +675,8 @@ function remoteRouteScope(method: string | undefined, path: string): ExperienceD
   if (method === "GET" && path === "/api/state") return "state:read";
   if (method === "GET" && path === "/api/surfaces") return "surface:access";
   if (method === "GET" && path === "/api/evidence") return "evidence:read";
+  if (method === "GET" && path === "/api/connected-apps") return "connected_app:read";
+  if (method === "POST" && /^\/api\/connected-apps\/[^/]+\/invoke$/.test(path)) return "connected_app:invoke";
   if (method === "POST" && path === "/api/experience/negotiate") return "experience:write";
   if (/^\/api\/experience\/[^/]+$/.test(path)) return method === "GET" ? "experience:read" : method === "PATCH" ? "experience:write" : undefined;
   if (method === "GET" && /^\/api\/experience\/[^/]+\/stream$/.test(path)) return "experience:read";
@@ -681,6 +723,7 @@ function handoffResources(
       session_ids: envelope.active.session_id ? [envelope.active.session_id] : [],
       run_ids: envelope.active.run_id ? [envelope.active.run_id] : [],
       artifact_ids: artifactIds,
+      connected_app_ids: envelope.connected_app_ids ?? [],
     };
   }
   if (Number(envelope.revision) !== envelopeRevision) {
@@ -699,6 +742,7 @@ function handoffResources(
     session_ids: envelope.active.session_id ? [envelope.active.session_id] : [],
     run_ids: envelope.active.run_id ? [envelope.active.run_id] : [],
     artifact_ids: artifactIds,
+    connected_app_ids: envelope.connected_app_ids ?? [],
   };
 }
 
@@ -717,6 +761,9 @@ function validateRemoteExperiencePatch(
   if (!principal) return;
   if ("model_route" in rawPatch) {
     throw new ExperienceSecurityError("scope_denied", "remote sessions cannot change model routing", 403);
+  }
+  if ("connected_app_ids" in rawPatch) {
+    throw new ExperienceSecurityError("scope_denied", "remote sessions cannot change connected-application authority", 403);
   }
   if (rawPatch.selected_artifact_id !== undefined && rawPatch.selected_artifact_id !== null) {
     requireRemoteResource(principal, "artifact_ids", String(rawPatch.selected_artifact_id));
@@ -772,11 +819,11 @@ function createGateway(
     masterKeyPath: PATHS.connectorMasterKey,
     evidence: (event) => appendEvidence(db, event.type, event.actor, event.payload),
   }) : null;
-  const connectedApps = boundary === "local" ? new ConnectedAppAuthorityService(db, {
+  const connectedApps = new ConnectedAppAuthorityService(db, {
     masterKeyPath: PATHS.connectedAppMasterKey,
     fetch: dependencies.connectedAppFetch,
     evidence: (event) => appendEvidence(db, event.type, event.actor, event.payload),
-  }) : null;
+  });
 
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", `http://${LOOPBACK}:${CORE_PORT}`);
@@ -956,7 +1003,12 @@ function createGateway(
       }
       if (path === "/api/connected-apps" && req.method === "GET") {
         res.setHeader("cache-control", "no-store");
-        return send(res, 200, { connectedApps: connectedApps!.profiles() });
+        const profiles = connectedApps.profiles();
+        return send(res, 200, {
+          connectedApps: remotePrincipal
+            ? profiles.filter((profile) => remotePrincipal!.resources.connected_app_ids.includes(profile.id))
+            : profiles,
+        });
       }
       if (path === "/api/connected-apps" && req.method === "POST") {
         res.setHeader("cache-control", "no-store");
@@ -982,9 +1034,52 @@ function createGateway(
           decodeURIComponent(connectedAppRefresh[1]!), requestAbortSignal(req, res),
         ));
       }
+      const connectedAppInvoke = path.match(/^\/api\/connected-apps\/([^/]+)\/invoke$/);
+      if (connectedAppInvoke && req.method === "POST") {
+        res.setHeader("cache-control", "no-store");
+        const connectedAppId = decodeURIComponent(connectedAppInvoke[1]!);
+        if (remotePrincipal) requireRemoteResource(remotePrincipal, "connected_app_ids", connectedAppId);
+        else if (!getExperience(db).connected_app_ids.includes(connectedAppId)) {
+          throw new ExperienceSecurityError("scope_denied", "connected app is not selected in the portable experience", 403);
+        }
+        const body = requestObject(await readBody(req));
+        if (typeof body.method !== "string" || ["initialize", "notifications/initialized"].includes(body.method)) {
+          throw new ConnectedAppTransportError("mcp_method_invalid", "connected app invocation method is invalid", null);
+        }
+        const clientSignal = requestAbortSignal(req, res);
+        const remoteRequest = remotePrincipal ? registerRemoteSurfaceRequest(remotePrincipal) : null;
+        const active = registerConnectedAppRequest(connectedAppId, [
+          clientSignal,
+          ...(remoteRequest ? [remoteRequest.controller.signal] : []),
+        ]);
+        let transport: ConnectedAppTransport | null = null;
+        let result: Awaited<ReturnType<ConnectedAppTransport["call"]>> | null = null;
+        try {
+          const credential = await connectedApps.resolve(`floyd-connected-app:${connectedAppId}`, active.signal);
+          transport = new ConnectedAppTransport(credential, { fetch: dependencies.connectedAppFetch });
+          await transport.initialize({
+            protocolVersion: "2025-11-25",
+            capabilities: {},
+            clientInfo: { name: "Floyd Workstation", version: "0.1.0" },
+          }, active.signal);
+          result = await transport.call(body.method, body.params, active.signal);
+        } finally {
+          await transport?.close(AbortSignal.timeout(2_000)).catch((error) => {
+            appendEvidence(db, "connected_app.transport_close_failed", "floyd-core", {
+              connected_app_id: connectedAppId,
+              error: error instanceof ConnectedAppTransportError ? error.code : "mcp_close_failed",
+            });
+          });
+          active.finish();
+          remoteRequest?.finish();
+        }
+        if (!result) throw new ConnectedAppTransportError("mcp_response_invalid", "connected app invocation returned no result", 502);
+        return send(res, 200, { connectedAppId, status: result.status, messages: result.messages });
+      }
       const connectedApp = path.match(/^\/api\/connected-apps\/([^/]+)$/);
       if (connectedApp && req.method === "DELETE") {
         res.setHeader("cache-control", "no-store");
+        abortConnectedAppRequests(decodeURIComponent(connectedApp[1]!));
         return send(res, 200, await connectedApps!.revoke(
           decodeURIComponent(connectedApp[1]!), "local-api", requestAbortSignal(req, res),
         ));
@@ -1742,6 +1837,7 @@ function createGateway(
         ? err.httpStatus
         : err instanceof ConnectorAuthorityError ? err.httpStatus
         : err instanceof ConnectedAppAuthorityError ? err.httpStatus
+        : err instanceof ConnectedAppTransportError ? err.upstreamStatus ?? 502
         : err instanceof RequestJsonError ? 400
         : err instanceof RequestBodyTooLargeError ? 413
         : typeof err === "object" && err && "statusCode" in err ? Number(err.statusCode) : 500;
@@ -1750,6 +1846,8 @@ function createGateway(
         : err instanceof ConnectorAuthorityError
           ? err.upstream ?? { error: err.code, message: err.message }
         : err instanceof ConnectedAppAuthorityError
+          ? err.upstream ?? { error: err.code, message: err.message }
+        : err instanceof ConnectedAppTransportError
           ? err.upstream ?? { error: err.code, message: err.message }
         : err instanceof RequestJsonError ? { error: "invalid_json", message: err.message }
         : err instanceof RequestBodyTooLargeError ? { error: "payload_too_large", message: err.message }
@@ -1782,8 +1880,14 @@ export function startGateway(
   return createGateway(db, engine, corePid, startedAt, "local", dependencies);
 }
 
-export function startRemoteGateway(db: Db, engine: OpenCodeEngine, corePid: number, startedAt: string): ReturnType<typeof createServer> {
-  return createGateway(db, engine, corePid, startedAt, "remote");
+export function startRemoteGateway(
+  db: Db,
+  engine: OpenCodeEngine,
+  corePid: number,
+  startedAt: string,
+  dependencies: GatewayDependencies = {},
+): ReturnType<typeof createServer> {
+  return createGateway(db, engine, corePid, startedAt, "remote", dependencies);
 }
 
 const HOP_BY_HOP_HEADERS = new Set([

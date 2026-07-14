@@ -251,7 +251,7 @@ test("typed and browser clients expose the same connector lifecycle without acto
   }
 });
 
-test("typed and browser clients expose connected-app discovery, OAuth start, refresh, and revocation without callback secrets", async () => {
+test("typed and browser clients expose connected-app discovery, OAuth, invocation, and revocation without callback secrets", async () => {
   for (const Client of [FloydClient, FloydBrowserClient] as const) {
     const seen: Request[] = [];
     const client = new Client({
@@ -267,14 +267,17 @@ test("typed and browser clients expose connected-app discovery, OAuth start, ref
     await client.createConnectedApp({ id: "notion", displayName: "Notion", resourceUrl: "https://mcp.notion.com/mcp" });
     await client.startConnectedAppOAuth("notion", 60_000);
     await client.refreshConnectedApp("notion");
+    await client.invokeConnectedApp("notion", { method: "tools/list", params: {} });
     await client.revokeConnectedApp("notion");
     assert.deepEqual(seen.map((request) => [request.method, new URL(request.url).pathname]), [
       ["GET", "/api/connected-apps"],
       ["POST", "/api/connected-apps"],
       ["POST", "/api/connected-apps/notion/oauth/start"],
       ["POST", "/api/connected-apps/notion/refresh"],
+      ["POST", "/api/connected-apps/notion/invoke"],
       ["DELETE", "/api/connected-apps/notion"],
     ]);
+    assert.deepEqual(JSON.parse(await seen[4]!.clone().text()), { method: "tools/list", params: {} });
     assert.equal(seen.some((request) => new URL(request.url).pathname.includes("callback")), false);
     for (const request of seen) assert.equal((await request.text()).includes("actor"), false);
   }

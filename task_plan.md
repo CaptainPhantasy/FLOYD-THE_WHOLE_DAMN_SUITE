@@ -379,10 +379,14 @@ and physical/external proof remain separate truth states.
   Core state plus the admitted surface inventory, Floyd Desktop rendered inside
   the integrated shell, the HttpOnly session remained unavailable to browser
   JavaScript, logout returned 200, and the next state request returned 401.
-- [ ] Exercise one real connected-application OAuth callback/refresh/revoke
-  lifecycle. Core now keeps this authority separate from model providers,
-  whose documented authentication is API-key based; mock coverage remains
-  implementation proof, not external-provider proof.
+- [x] Exercise one real connected-application OAuth callback, refresh, MCP
+  invocation, and revoke lifecycle. Notion completed the loopback callback and
+  rotating refresh path; after the launchd-owned Core restart, the selected
+  `notion` profile initialized MCP and returned `tools/list` with HTTP 200.
+  Core then deselected it at envelope revision 745, upstream revocation returned
+  HTTP 200, and the durable profile reported `revoked`. No token or callback
+  secret entered the envelope, SDK response, process arguments, or evidence
+  output.
 - [x] Resolve the remote application boundary with four Core-owned,
   device-session-authenticated, provenance-gated HTTP/WebSocket relays behind
   tailnet HTTPS. Live rendered proof opened Desktop, IDE, TerminalOne, Launcher,
@@ -390,8 +394,11 @@ and physical/external proof remain separate truth states.
   PTY active/resumable counts returned `1/0 -> 0/0`, logout returned 200, and
   the next authenticated surface request returned 401.
 
-**Status:** in progress. The goal remains open until every unchecked item has a
-receipt or the user explicitly changes the acceptance boundary.
+**Status:** implementation and automated/live provider gates are complete.
+The 2026-07-14 final rendered reinspection is blocked because both installed
+browser-control paths share a closed transport; prior five-surface and physical
+MacBook rendered receipts remain valid, but they do not substitute for a fresh
+render of this connected-app selection change.
 
 ## Plan Maintenance
 

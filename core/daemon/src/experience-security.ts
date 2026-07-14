@@ -45,10 +45,12 @@ export const DEFAULT_HANDOFF_DEVICE_SCOPES: ExperienceDeviceSessionScope[] = [
   "run:read",
   "artifact:read",
   "evidence:read",
+  "connected_app:read",
+  "connected_app:invoke",
   "surface:access",
 ];
 const EMPTY_RESOURCES: ExperienceDeviceSessionResources = {
-  envelope_ids: [], project_ids: [], session_ids: [], run_ids: [], artifact_ids: [],
+  envelope_ids: [], project_ids: [], session_ids: [], run_ids: [], artifact_ids: [], connected_app_ids: [],
 };
 
 const SECURITY_SCHEMA = `
@@ -87,7 +89,7 @@ CREATE TABLE IF NOT EXISTS experience_device_sessions (
   device_id TEXT NOT NULL REFERENCES experience_devices(id),
   token_hash BLOB NOT NULL,
   scopes_json TEXT NOT NULL,
-  resources_json TEXT NOT NULL DEFAULT '{"envelope_ids":[],"project_ids":[],"session_ids":[],"run_ids":[],"artifact_ids":[]}',
+  resources_json TEXT NOT NULL DEFAULT '{"envelope_ids":[],"project_ids":[],"session_ids":[],"run_ids":[],"artifact_ids":[],"connected_app_ids":[]}',
   snapshot_json TEXT,
   created_at TEXT NOT NULL,
   expires_at_ms INTEGER NOT NULL,
@@ -267,6 +269,7 @@ export function ensureExperienceSecuritySchema(db: Db): void {
   ensureColumn(db, "experience_devices", "transient", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn(db, "experience_device_sessions", "resources_json", `TEXT NOT NULL DEFAULT '${JSON.stringify(EMPTY_RESOURCES)}'`);
   ensureColumn(db, "experience_device_sessions", "snapshot_json", "TEXT");
+  migrateLegacyDeviceSessionResources(db);
 }
 
 /**
@@ -1146,7 +1149,7 @@ function intersectScopes(
 function validDeviceSessionResources(input: ExperienceDeviceSessionResources): ExperienceDeviceSessionResources {
   if (input === null || typeof input !== "object" || Array.isArray(input)) invalid("device session resources are invalid");
   const output = {} as ExperienceDeviceSessionResources;
-  for (const key of ["envelope_ids", "project_ids", "session_ids", "run_ids", "artifact_ids"] as const) {
+  for (const key of ["envelope_ids", "project_ids", "session_ids", "run_ids", "artifact_ids", "connected_app_ids"] as const) {
     const values = input[key];
     if (!Array.isArray(values) || values.length > 128) invalid(`device session ${key} are invalid`);
     output[key] = [...new Set(values.map((value) => validId(value, key)))].sort();
@@ -1156,10 +1159,27 @@ function validDeviceSessionResources(input: ExperienceDeviceSessionResources): E
 
 function parseStoredDeviceSessionResources(value: string): ExperienceDeviceSessionResources {
   try {
-    return validDeviceSessionResources(JSON.parse(value) as ExperienceDeviceSessionResources);
+    const parsed = JSON.parse(value) as unknown;
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) invalid("stored device session resources are invalid");
+    return validDeviceSessionResources({ ...EMPTY_RESOURCES, ...parsed as Partial<ExperienceDeviceSessionResources> });
   } catch (error) {
     if (error instanceof ExperienceSecurityError) throw error;
     throw new ExperienceSecurityError("device_session_invalid", "stored device session resources are invalid", 401);
+  }
+}
+
+function migrateLegacyDeviceSessionResources(db: Db): void {
+  const rows = db.prepare(`SELECT id, resources_json FROM experience_device_sessions`).all() as Array<{ id: string; resources_json: string }>;
+  const update = db.prepare(`UPDATE experience_device_sessions SET resources_json = ? WHERE id = ?`);
+  for (const row of rows) {
+    try {
+      const parsed = JSON.parse(row.resources_json) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && !Object.hasOwn(parsed, "connected_app_ids")) {
+        update.run(JSON.stringify(validDeviceSessionResources({ ...EMPTY_RESOURCES, ...parsed as Partial<ExperienceDeviceSessionResources> })), row.id);
+      }
+    } catch {
+      // Preserve corrupt rows so authentication continues to fail closed.
+    }
   }
 }
 

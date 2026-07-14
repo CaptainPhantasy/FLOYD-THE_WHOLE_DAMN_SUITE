@@ -22,6 +22,8 @@ import {
   type ConnectedAppProfile,
   type ConnectedAppProfileInput,
   type ConnectedAppOAuthStart,
+  type ConnectedAppInvokeRequest,
+  type ConnectedAppInvokeResponse,
   type Run,
   type Session,
 } from "@floyd/contracts";
@@ -360,6 +362,14 @@ export class FloydClient {
 
   revokeConnectedApp(connectedAppId: string, signal?: AbortSignal): Promise<{ connectedAppId: string; revoked: boolean; upstreamStatus: number | null }> {
     return this.request("DELETE", `/api/connected-apps/${encodeURIComponent(connectedAppId)}`, undefined, signal);
+  }
+
+  invokeConnectedApp(
+    connectedAppId: string,
+    request: ConnectedAppInvokeRequest,
+    signal?: AbortSignal,
+  ): Promise<ConnectedAppInvokeResponse> {
+    return this.request("POST", `/api/connected-apps/${encodeURIComponent(connectedAppId)}/invoke`, request, signal);
   }
 
   /**

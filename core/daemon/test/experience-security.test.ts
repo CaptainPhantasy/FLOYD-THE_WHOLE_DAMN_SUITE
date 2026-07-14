@@ -62,7 +62,7 @@ test("device sessions are scoped, expiring, hash-at-rest, and revoked with their
     ["experience:read", "session:read"],
     60_000,
     enrolled.deviceId,
-    { envelope_ids: ["primary"], project_ids: [], session_ids: ["ses_a"], run_ids: [], artifact_ids: [] },
+    { envelope_ids: ["primary"], project_ids: [], session_ids: ["ses_a"], run_ids: [], artifact_ids: [], connected_app_ids: [] },
   );
   const row = db.prepare(`SELECT * FROM experience_device_sessions WHERE id = ?`).get(issued.sessionId) as Record<string, unknown>;
   assert.equal(JSON.stringify(row).includes(issued.token), false);
@@ -153,7 +153,7 @@ test("handoff consumption and resource-bound session issuance are atomic", async
   });
   const device = await service.enrollDevice({ name: "Receiver" }, "dev_receiver");
   const issued = service.issueHandoff({ envelopeId: "primary", envelopeRevision: 7 });
-  const resources = { envelope_ids: ["primary"], project_ids: ["prj_a"], session_ids: ["ses_a"], run_ids: ["run_a"], artifact_ids: ["art_a"] };
+  const resources = { envelope_ids: ["primary"], project_ids: ["prj_a"], session_ids: ["ses_a"], run_ids: ["run_a"], artifact_ids: ["art_a"], connected_app_ids: [] };
 
   fail = true;
   assert.throws(() => service.consumeHandoffForDevice(issued.token, device.deviceId, () => resources), /evidence unavailable/);
@@ -174,11 +174,74 @@ test("handoff consumption and resource-bound session issuance are atomic", async
   ).deviceId, device.deviceId);
 });
 
+test("handoff carries immutable connected-app selections without management authority", async () => {
+  const { service } = fixture();
+  const device = await service.enrollDevice({ name: "Connected-app receiver" }, "dev_connected_apps");
+  const selected = ["app_notes", "app_calendar"];
+  const snapshot = { envelope: { id: "primary", revision: 8 }, connected_app_ids: selected };
+  const issued = service.issueHandoff({ envelopeId: "primary", envelopeRevision: 8, snapshot });
+  selected.push("app_mutated_after_issue");
+
+  const consumed = service.consumeHandoffForDevice(issued.token, device.deviceId, (_id, _revision, storedSnapshot) => {
+    assert.deepEqual(storedSnapshot?.connected_app_ids, ["app_notes", "app_calendar"]);
+    return {
+      envelope_ids: ["primary"], project_ids: [], session_ids: [], run_ids: [], artifact_ids: [],
+      connected_app_ids: storedSnapshot?.connected_app_ids as string[],
+    };
+  });
+
+  assert.deepEqual(consumed.session.resources.connected_app_ids, ["app_calendar", "app_notes"]);
+  assert.equal(consumed.session.scopes.includes("connected_app:read"), true);
+  assert.equal(consumed.session.scopes.includes("connected_app:invoke"), true);
+  assert.equal((consumed.session.scopes as readonly string[]).includes("connected_app:manage"), false);
+  assert.equal(service.authenticateDeviceSession(
+    consumed.session.token,
+    "connected_app:invoke",
+    { kind: "connected_app_ids", id: "app_notes" },
+  ).sessionId, consumed.session.sessionId);
+  assert.throws(
+    () => service.authenticateDeviceSession(
+      consumed.session.token,
+      "connected_app:read",
+      { kind: "connected_app_ids", id: "app_unselected" },
+    ),
+    (error: unknown) => {
+      assert.equal((error as ExperienceSecurityError).code, "scope_denied");
+      return true;
+    },
+  );
+  assert.throws(
+    () => service.authenticateDeviceSession(consumed.session.token, "connected_app:manage" as never),
+    (error: unknown) => {
+      assert.equal((error as ExperienceSecurityError).code, "scope_denied");
+      return true;
+    },
+  );
+});
+
+test("legacy session resources hydrate and migrate an empty connected-app selection", async () => {
+  const { db, service } = fixture();
+  const device = await service.enrollDevice({ name: "Legacy resources" }, "dev_legacy_resources");
+  const session = service.issueDeviceSession(device.deviceId, ["experience:read"], 60_000);
+  const legacy = { envelope_ids: ["primary"], project_ids: [], session_ids: [], run_ids: [], artifact_ids: [] };
+  db.prepare(`UPDATE experience_device_sessions SET resources_json = ? WHERE id = ?`).run(JSON.stringify(legacy), session.sessionId);
+
+  assert.deepEqual(service.authenticateDeviceSession(session.token).resources.connected_app_ids, []);
+  ensureExperienceSecuritySchema(db);
+  const migrated = db.prepare(`SELECT resources_json FROM experience_device_sessions WHERE id = ?`).get(session.sessionId) as { resources_json: string };
+  assert.deepEqual((JSON.parse(migrated.resources_json) as { connected_app_ids: string[] }).connected_app_ids, []);
+  db.prepare(`UPDATE experience_device_sessions SET resources_json = '[]' WHERE id = ?`).run(session.sessionId);
+  assert.throws(() => service.authenticateDeviceSession(session.token), (error: unknown) => {
+    assert.equal((error as ExperienceSecurityError).code, "invalid_input");
+    return true;
+  });
+});
+
 test("first-device pairing is idempotently recoverable and stores no usable browser device secret", async () => {
   const { db, service, advance } = fixture();
   const snapshot = { envelope: { id: "primary", revision: 9, active: { project_id: "prj", session_id: "ses", run_id: "run" } }, artifact_ids: ["art"] };
   const issued = service.issueHandoff({ envelopeId: "primary", envelopeRevision: 9, snapshot });
-  const resources = { envelope_ids: ["primary"], project_ids: ["prj"], session_ids: ["ses"], run_ids: ["run"], artifact_ids: ["art"] };
+  const resources = { envelope_ids: ["primary"], project_ids: ["prj"], session_ids: ["ses"], run_ids: ["run"], artifact_ids: ["art"], connected_app_ids: [] };
   const attempts = await Promise.allSettled([
     service.pairHandoff(issued.token, { surface: "browser" }, (_id, _revision, stored) => {
       assert.deepEqual(stored, snapshot);

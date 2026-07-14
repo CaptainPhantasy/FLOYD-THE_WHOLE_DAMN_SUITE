@@ -118,7 +118,11 @@ test("remote cockpit is continuation-only and disables local authority controls"
   assert.match(html, /Remote continuation cannot create a new run/);
   assert.match(html, /Run decisions require the local authority surface/);
   assert.match(html, /Private remote continuation/);
-  assert.match(html, /\["newTask", "modelSettings", "connectedApps", "shareHandoff", "acceptRun", "rejectRun", "escalateRun"\]/);
+  assert.match(html, /\["newTask", "modelSettings", "shareHandoff", "acceptRun", "rejectRun", "escalateRun"\]/);
+  assert.match(html, /data-connected-app-select=/);
+  assert.match(html, /\$\{remoteMode \? "disabled" : ""\}/);
+  assert.match(html, /Remote continuation can use it but cannot expand its authority/);
+  assert.match(html, /el\("connectedApps"\)\.addEventListener\("click", \(\) => openConnectedApps\(\)\.catch\(notify\)\)/);
   assert.match(html, /client\.pairExperienceHandoff\(handoffToken\)/);
   assert.match(html, /async function confirmRemoteDeviceSession/);
   assert.match(html, /\[401, 403\]\.includes\(error\.status\)/);

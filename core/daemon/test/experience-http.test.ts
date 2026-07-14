@@ -80,14 +80,35 @@ const expectedSurfaceIdentity = new Map([
 ]);
 const observedSurfaceHealthUrls: string[] = [];
 let mismatchedSurfaceId: string | null = null;
-const connectedAppCalls: Array<{ url: string; form: URLSearchParams | null }> = [];
+const connectedAppCalls: Array<{ url: string; method: string; form: URLSearchParams | null; body: unknown; headers: Headers }> = [];
 const connectedAppFetch: typeof globalThis.fetch = async (input, init = {}) => {
   const url = String(input);
+  const method = init.method ?? "GET";
   const form = init.body instanceof URLSearchParams ? new URLSearchParams(init.body) : null;
-  connectedAppCalls.push({ url, form });
-  if (url === "https://mcp.http.test/mcp") {
+  let body: unknown = null;
+  if (typeof init.body === "string") {
+    try { body = JSON.parse(init.body); } catch { body = init.body; }
+  }
+  const headers = new Headers(init.headers);
+  connectedAppCalls.push({ url, method, form, body, headers });
+  if (url === "https://mcp.http.test/mcp" && method === "GET") {
     return new Response(null, { status: 401, headers: { "www-authenticate": "Bearer resource_metadata=\"https://mcp.http.test/.well-known/oauth-protected-resource/mcp\"" } });
   }
+  if (url === "https://mcp.http.test/mcp" && method === "POST") {
+    const message = body as { id?: number; method?: string };
+    if (message.method === "initialize") {
+      return Response.json({
+        jsonrpc: "2.0", id: message.id,
+        result: { protocolVersion: "2025-11-25", capabilities: {}, serverInfo: { name: "HTTP MCP", version: "1.0.0" } },
+      }, { headers: { "mcp-session-id": "http-mcp-session" } });
+    }
+    if (message.method === "notifications/initialized") return new Response(null, { status: 202 });
+    if (message.method === "tools/list") {
+      return Response.json({ jsonrpc: "2.0", id: message.id, result: { tools: [{ name: "notes.search" }] } });
+    }
+    return Response.json({ jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "not found" } });
+  }
+  if (url === "https://mcp.http.test/mcp" && method === "DELETE") return new Response(null, { status: 204 });
   if (url === "https://mcp.http.test/.well-known/oauth-protected-resource/mcp") {
     return Response.json({ resource: "https://mcp.http.test/mcp", authorization_servers: ["https://auth.http.test"] });
   }
@@ -125,7 +146,7 @@ const surfaceHealthFetch = async (input: string | URL | Request, init?: RequestI
   });
 };
 const server = startGateway(db, engine, process.pid, new Date().toISOString(), { surfaceHealthFetch, connectedAppFetch });
-const remoteServer = startRemoteGateway(db, engine, process.pid, new Date().toISOString());
+const remoteServer = startRemoteGateway(db, engine, process.pid, new Date().toISOString(), { connectedAppFetch });
 if (!server.listening) await once(server, "listening");
 if (!remoteServer.listening) await once(remoteServer, "listening");
 const address = server.address();
@@ -782,10 +803,76 @@ test("HTTP connected-app OAuth keeps callback exchange server-owned and supports
   assert.equal((await refreshed.json() as { connectedAppId: string }).connectedAppId, "http-notes");
   assert.equal(connectedAppCalls.filter((call) => call.form?.get("grant_type") === "refresh_token").length, 1);
 
+  let envelope = await (await api("/api/experience/primary")).json() as { revision: number; connected_app_ids: string[] };
+  const selected = await api("/api/experience/primary", {
+    method: "PATCH",
+    body: JSON.stringify({ expected_revision: envelope.revision, connected_app_ids: ["http-notes"] }),
+  });
+  assert.equal(selected.status, 200);
+  envelope = await selected.json() as typeof envelope;
+  assert.deepEqual(envelope.connected_app_ids, ["http-notes"]);
+
+  const invoked = await api("/api/connected-apps/http-notes/invoke", {
+    method: "POST",
+    body: JSON.stringify({ method: "tools/list", params: {} }),
+  });
+  assert.equal(invoked.status, 200);
+  const invokedText = await invoked.text();
+  assert.deepEqual(JSON.parse(invokedText), {
+    connectedAppId: "http-notes",
+    status: 200,
+    messages: [{ jsonrpc: "2.0", id: 2, result: { tools: [{ name: "notes.search" }] } }],
+  });
+  assert.doesNotMatch(invokedText, /http-access|http-refresh|Authorization/i);
+  const mcpCalls = connectedAppCalls.filter((call) => call.url === "https://mcp.http.test/mcp" && call.method !== "GET");
+  assert.deepEqual(mcpCalls.map((call) => call.method), ["POST", "POST", "POST", "DELETE"]);
+  assert.equal(mcpCalls[0]!.headers.get("authorization"), "Bearer http-access-two");
+  assert.equal(mcpCalls[1]!.headers.get("mcp-session-id"), "http-mcp-session");
+  assert.equal(mcpCalls[2]!.headers.get("mcp-protocol-version"), "2025-11-25");
+
+  const remoteDeviceResponse = await api("/api/devices/enroll", {
+    method: "POST",
+    body: JSON.stringify({ device_id: "connected-app-http-device", metadata: { surface: "connected-app-test" } }),
+  });
+  const remoteDevice = await remoteDeviceResponse.json() as { device_id: string; secret: string };
+  const handoffResponse = await api("/api/handoffs", {
+    method: "POST",
+    body: JSON.stringify({ envelope_id: "primary", envelope_revision: envelope.revision, created_by_device_id: remoteDevice.device_id }),
+  });
+  const handoff = await handoffResponse.json() as { token: string };
+  const consumed = await remoteSelfAuthenticatedPost("/api/handoffs/consume", {
+    token: handoff.token,
+    device_id: remoteDevice.device_id,
+    device_secret: remoteDevice.secret,
+  });
+  assert.equal(consumed.status, 200);
+  const remoteSession = await consumed.json() as { session: { token: string; resources: { connected_app_ids: string[] } } };
+  assert.deepEqual(remoteSession.session.resources.connected_app_ids, ["http-notes"]);
+  const remoteListed = await remoteApi("/api/connected-apps", remoteSession.session.token);
+  assert.equal(remoteListed.status, 200);
+  assert.deepEqual((await remoteListed.json() as { connectedApps: Array<{ id: string }> }).connectedApps.map((profile) => profile.id), ["http-notes"]);
+  const remoteInvoked = await remoteApi("/api/connected-apps/http-notes/invoke", remoteSession.session.token, {
+    method: "POST", body: JSON.stringify({ method: "tools/list" }),
+  });
+  assert.equal(remoteInvoked.status, 200);
+  assert.equal((await remoteApi("/api/connected-apps/not-selected/invoke", remoteSession.session.token, {
+    method: "POST", body: JSON.stringify({ method: "tools/list" }),
+  })).status, 403);
+  assert.equal((await remoteApi("/api/experience/primary", remoteSession.session.token, {
+    method: "PATCH", body: JSON.stringify({ expected_revision: envelope.revision, connected_app_ids: [] }),
+  })).status, 403);
+  assert.equal((await remoteApi("/api/device-sessions/current", remoteSession.session.token, { method: "DELETE" })).status, 200);
+
+  const latest = await (await api("/api/experience/primary")).json() as typeof envelope;
+  const deselected = await api("/api/experience/primary", {
+    method: "PATCH", body: JSON.stringify({ expected_revision: latest.revision, connected_app_ids: [] }),
+  });
+  assert.equal(deselected.status, 200);
+
   const revoked = await api("/api/connected-apps/http-notes", { method: "DELETE" });
   assert.equal(revoked.status, 200);
   assert.deepEqual(await revoked.json(), { connectedAppId: "http-notes", revoked: true, upstreamStatus: 204 });
-  assert.equal((await remoteApi("/api/connected-apps", "invalid")).status, 403);
+  assert.equal((await remoteApi("/api/connected-apps", "invalid")).status, 401);
 });
 
 test("a fresh session attach receives a durable transcript snapshot", async () => {

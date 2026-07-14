@@ -238,6 +238,19 @@ export interface ConnectedAppOAuthStart {
   expiresAt: string;
 }
 
+/** Browser-safe invocation input. Core supplies OAuth and MCP session state. */
+export interface ConnectedAppInvokeRequest {
+  method: string;
+  params?: unknown;
+}
+
+/** Normalized JSON-RPC messages returned by a Core-owned MCP transport. */
+export interface ConnectedAppInvokeResponse {
+  connectedAppId: string;
+  status: number;
+  messages: unknown[];
+}
+
 export interface RouteReceipt {
   provider: string;
   model: string;
@@ -288,6 +301,8 @@ export interface ExperienceEnvelope {
   revision: number;
   active: ExperienceActiveContext;
   model_route: ExperienceModelRoute;
+  /** Core-owned connected applications selected for this portable experience. */
+  connected_app_ids: string[];
   transcript_cursor: number;
   transcript_epoch: string | null;
   last_event_id: string | null;
@@ -305,6 +320,7 @@ export interface ExperienceEnvelopePatch {
   expected_revision: number;
   active?: Partial<ExperienceActiveContext>;
   model_route?: Partial<ExperienceModelRoute>;
+  connected_app_ids?: string[];
   transcript_cursor?: number;
   transcript_epoch?: string | null;
   last_event_id?: string | null;
@@ -353,6 +369,10 @@ export const FLOYD_DEVICE_SESSION_SCOPES = [
   "run:read",
   "artifact:read",
   "evidence:read",
+  /** Read state from a connected app selected in this session's immutable handoff resources. */
+  "connected_app:read",
+  /** Invoke a connected app selected in this session's immutable handoff resources. */
+  "connected_app:invoke",
   /** Grants an authenticated remote device the same host-app authority as the local developer UI. */
   "surface:access",
 ] as const;
@@ -365,6 +385,7 @@ export interface ExperienceDeviceSessionResources {
   session_ids: string[];
   run_ids: string[];
   artifact_ids: string[];
+  connected_app_ids: string[];
 }
 
 export interface ExperienceDeviceSession {
