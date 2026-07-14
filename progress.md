@@ -263,3 +263,12 @@ A 2026-07-12 audit found a self-resurrecting `com.floyd.core` launchd daemon, a 
 - Live runtime proof: Core started on `127.0.0.1:41414`, supervised OpenCode 1.17.18 on `127.0.0.1:41415`, CLI health returned both healthy, and a direct `OpenCodeSdkRuntime.health()` returned `true`; both processes were cleanly stopped.
 - Verification: 39/39 tests pass, TypeScript project references clean, production audit reports 0 vulnerabilities at all severities.
 - Sharp edges retained as open issues: Node 22.18.0 is below declared Node >=26; no launchd autostart; surface donors are inventoried but not copied/admitted; The_Burner has no local checkout; official OpenCode SDK adds daemon-only `cross-spawn` transitively.
+
+## Natural-language coding pane — 2026-07-13
+
+- Replaced the minimal cockpit run inspector with an IDE-style natural-language coding partner pane: project selector, run history, new-run composer, active-run steering, normalized token/tool stream, inline question/permission decisions, accept/reject/escalate gate, artifact inspector, responsive layout, and explicit Core/OpenCode authority display.
+- Added the dependency-free browser build at `packages/sdk/browser/floyd-sdk.js`; Core serves it as `/floyd-sdk.js`. The cockpit contains no raw `fetch`, `EventSource`, direct OpenCode endpoint, provider key, or OpenCode SDK import.
+- Removed all emoji glyphs from the cockpit. UI marks and controls use typography, borders, and CSS geometry.
+- First rendered Chrome proof caught `TypeError: Illegal invocation` because native `window.fetch` had been stored unbound. `FloydBrowserClient` now binds native fetch; a regression test covers receiver-sensitive fetch.
+- Second rendered proof PASS: title `Floyd Workstation`; health `Core and engine online`; one `scratch-calc` project; 14 runs; no toast; no page errors; no emoji glyphs; no EventSource path. Selecting a real accepted run rendered two transcript rows, four inspector sections, accepted state, two engine jobs, five artifacts, and no page errors.
+- Security incident during proof cleanup: a process-list command printed the URL-bootstrap gateway token from Chrome's command line. The proof browser and Core were stopped, the token was rotated, and live auth verification returned old token HTTP 401 / new token HTTP 200. Future proof must avoid putting gateway tokens in process arguments.
