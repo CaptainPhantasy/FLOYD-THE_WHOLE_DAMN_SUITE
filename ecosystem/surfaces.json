@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "verified_at": "2026-07-14T04:52:58-04:00",
+  "verified_at": "2026-07-14T06:43:25-04:00",
   "authority": {
     "source_control": "/Volumes/Storage/FLOYD_WORKSTATION",
     "runtime": "/Volumes/Storage/FLOYD_RUNTIME",
@@ -23,15 +23,16 @@
       "integration": {
         "status": "verified_component_branch",
         "branch": "feat/floyd-core-runtime",
-        "commit": "7da081137bb6052e0c48086b6a700000a0cafcec",
+        "commit": "822ee6367aa48acb63f55db48a826b48d53c7d56",
         "remote_ref": "origin/feat/floyd-core-runtime",
         "contract": "vendored @floyd/sdk -> server-side Floyd Core bridge -> managed OpenCode SDK",
         "production_audit_vulnerabilities": 0,
         "rendered_proof": true,
+        "admitted_runtime_url": "http://127.0.0.1:13010/",
         "experience": {
           "status": "verified",
           "surface_id": "desktop",
-          "restore": ["active-context", "composer-draft", "durable-transcript"],
+          "restore": ["active-context", "composer-draft", "durable-transcript", "selected-artifact", "pending-questions", "pending-permissions", "model-route"],
           "publish": ["active-context", "composer-draft", "selected-view", "surface-presence"],
           "watch": true,
           "optimistic_conflicts": "preserve-409-no-blind-retry",
@@ -54,17 +55,18 @@
       "integration": {
         "status": "verified_component_branch",
         "branch": "feat/floyd-core-runtime",
-        "commit": "fb33ca8526a1ef14711e22673fae0c78cb0a3592",
+        "commit": "ed81b2fe190ebd2f941c458d27eef92b065024cd",
         "remote_ref": "origin/feat/floyd-core-runtime",
         "contract": "vendored @floyd/sdk -> server-side Floyd Core bridge -> managed OpenCode SDK",
         "production_audit_vulnerabilities": 0,
         "rendered_proof": true,
+        "admitted_runtime_url": "http://127.0.0.1:13012/",
         "folder_workspace_proof": true,
         "local_workspace_root_propagation": ["file-explorer", "terminal", "ai"],
         "experience": {
           "status": "verified",
           "surface_id": "ide",
-          "restore": ["active-context", "composer-draft", "durable-transcript", "workspace"],
+          "restore": ["active-context", "composer-draft", "durable-transcript", "workspace", "selected-artifact", "pending-questions", "pending-permissions", "model-route"],
           "publish": ["active-context", "composer-draft", "selected-view", "workspace", "surface-presence"],
           "watch": true,
           "optimistic_conflicts": "preserve-409-no-blind-retry",
@@ -87,7 +89,7 @@
       "integration": {
         "status": "verified_component_branch",
         "branch": "feat/floyd-core-runtime",
-        "commit": "92b395d64101ac66f0e7523058f0e3fe675babf8",
+        "commit": "a1c9c06350dda8079ccf0ad5315569f198d823ff",
         "remote_ref": "origin/feat/floyd-core-runtime",
         "contract": "workspace @floyd/sdk -> Floyd Core -> managed OpenCode SDK",
         "production_audit_vulnerabilities": 0,
@@ -97,14 +99,14 @@
         "legacy_direct_provider_command": "omp launch",
         "runtime_artifact": {
           "path": "/Volumes/Storage/FLOYD_RUNTIME/bin/floyd-tui",
-          "sha256": "d0d330cf39237078e419625fd13a855297232c44bb6075f673c86a1b43fccf79",
+          "sha256": "933ab2bab3037b226e48ca67e698de1ce878d81e2c00ee6c442102ac3ee0dcb8",
           "architecture": "arm64",
           "provenance": "/Volumes/Storage/FLOYD_RUNTIME/bin/floyd-tui.provenance"
         },
         "experience": {
           "status": "verified",
           "surface_id": "tui",
-          "restore": ["active-context", "composer-draft", "durable-transcript", "transcript-cursor"],
+          "restore": ["active-context", "composer-draft", "durable-transcript", "transcript-cursor", "selected-artifact", "pending-questions", "pending-permissions", "model-route"],
           "publish": ["active-context", "composer-draft", "selected-view", "transcript-cursor", "surface-presence"],
           "watch": true,
           "optimistic_conflicts": "preserve-409-no-blind-retry",
@@ -127,13 +129,14 @@
       "integration": {
         "status": "verified_component_branch",
         "branch": "feat/floyd-core-runtime",
-        "commit": "4263cf60dc473d39a7451d32b7c8209be80d1493",
+        "commit": "210c7337db8dc1548b1207f6cc89c0a9dfc32a0f",
         "remote_ref": "origin/feat/floyd-core-runtime",
         "contract": "vendored @floyd/sdk -> loopback Floyd Core health bridge + canonical CLI PTY -> managed OpenCode SDK",
         "production_audit_vulnerabilities": 0,
         "rendered_proof": true,
         "pty_round_trip": true,
-        "admitted_tui_sha256": "d0d330cf39237078e419625fd13a855297232c44bb6075f673c86a1b43fccf79",
+        "admitted_runtime_url": "http://127.0.0.1:13013/",
+        "admitted_tui_sha256": "933ab2bab3037b226e48ca67e698de1ce878d81e2c00ee6c442102ac3ee0dcb8",
         "experience": {
           "status": "verified_transport",
           "surface_id": "pty",
@@ -161,13 +164,21 @@
       "integration": {
         "status": "verified_local_copy_commit",
         "branch": "feat/floyd-core-runtime",
-        "commit": "23d05f50e567e1774c12bd9d6d44a3bde50a2e69",
+        "commit": "93f26dfd4f306e0a95935ed28c0d5b9f3bbc26f8",
         "remote_ref": null,
         "remote_note": "origin is the protected local donor; intentionally not pushed",
         "contract": "vendored @floyd/sdk -> loopback Floyd Core health bridge + canonical CLI harness -> managed OpenCode SDK",
         "production_audit_vulnerabilities": 0,
         "rendered_proof": true,
         "pty_round_trip": true,
+        "exact_tui_handoff": true,
+        "raw_pty_resume": {
+          "single_owner": true,
+          "ttl_ms": 120000,
+          "replay_max_bytes": 524288,
+          "storage": "memory-only"
+        },
+        "admitted_runtime_url": "http://127.0.0.1:13014/",
         "experience": {
           "status": "verified_transport",
           "surface_id": "launcher",

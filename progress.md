@@ -356,7 +356,11 @@ A 2026-07-12 audit found a self-resurrecting `com.floyd.core` launchd daemon, a 
 - Live CORS proof on Core PID `86166` returned 204 for `Origin: http://127.0.0.1:5173` with the exact gateway header allowlist and 403 for `Origin: https://evil.example`.
 - Boundary: durable coding runs still route through the supervised OpenCode engine. The raw completion relay does not replace OpenCode's coding tools, worktree lease, policy, or review lifecycle.
 
-## Portable experience completion — 2026-07-14
+## Portable experience implementation — 2026-07-14
+
+The five-surface preview is an intermediate test milestone. The active objective
+remains seamless maintained handoff across all Floyd applications; it is not a
+scope reduction or a deferral of the connected-application experience.
 
 - Added negotiate/restore/watch/optimistic-publish adapters to all five copied
   surfaces. Desktop, IDE, and TUI restore durable Core transcripts; TerminalOne
@@ -372,18 +376,31 @@ A 2026-07-12 audit found a self-resurrecting `com.floyd.core` launchd daemon, a 
   detach/stop. An initial CLI message starts a new task unless `--continue` is
   explicit.
 - Rejected a TerminalOne draft that would have invoked global `omp` and bypassed
-  Core. The copied TUI commit `92b395d64101ac66f0e7523058f0e3fe675babf8`
+  Core. The copied TUI commit `d1f0c00e0c9027909fd93c75afa20f9ca49e18a1`
   was compiled and admitted as `/Volumes/Storage/FLOYD_RUNTIME/bin/floyd-tui`,
-  SHA-256 `d0d330cf39237078e419625fd13a855297232c44bb6075f673c86a1b43fccf79`.
+  SHA-256 `dd0e40158c4e349e7411e240a4df97bf29e8ab6342206c060f2345ce1acbb831`.
   TerminalOne requires that absolute executable and has no PATH fallback.
-- Final copied commits: Desktop `7da081137bb6052e0c48086b6a700000a0cafcec`,
-  IDE `fb33ca8526a1ef14711e22673fae0c78cb0a3592`, TUI
-  `92b395d64101ac66f0e7523058f0e3fe675babf8`, TerminalOne
-  `4263cf60dc473d39a7451d32b7c8209be80d1493`, and launcher
-  `23d05f50e567e1774c12bd9d6d44a3bde50a2e69`.
-- Independent component verification passed: Desktop 10/10 plus build; IDE 7/7
-  plus typecheck/build; TUI 10/10 plus both package checks; TerminalOne full
+- Final copied commits: Desktop `822ee6367aa48acb63f55db48a826b48d53c7d56`,
+  IDE `ed81b2fe190ebd2f941c458d27eef92b065024cd`, TUI
+  `a1c9c06350dda8079ccf0ad5315569f198d823ff`, TerminalOne
+  `210c7337db8dc1548b1207f6cc89c0a9dfc32a0f`, and launcher
+  `93f26dfd4f306e0a95935ed28c0d5b9f3bbc26f8`.
+- Independent component verification passed: Desktop 48/48 plus build; IDE 24/24
+  plus lint/typecheck/build; TUI 14 focused lifecycle tests with 46 assertions
+  plus package checks and build; TerminalOne full
   unit/Core/smoke/feature/behavior/responsive suite; launcher focused adapter,
   16/16 live harness, error-recovery, injection, respawn, and concurrency
   suites. Launcher `npm test` now owns the dependent server lifecycle: it
   starts a cold server, waits for readiness, runs the suites, and shuts it down.
+- Launcher retains an unexpectedly detached raw PTY for a token-authenticated,
+  single-owner two-minute reconnect window with a bounded 512 KiB replay. Its
+  active-session action now launches the admitted TUI in the Core-owned project
+  root with the exact project/session/run/event tuple.
+- The copied Desktop, IDE, TerminalOne, and Launcher are live on reserved
+  loopback ports 13010, 13012, 13013, and 13014 respectively. Process-cwd and
+  Git-HEAD receipts bind those listeners to the admitted copies; the donor
+  listeners on 3001, 10001, and 11001 remain untouched and are not Hub targets.
+- A final long-lived-browser proof initially raced navigation and displayed the
+  prior page. Core now sends `Cache-Control: no-store` for Cockpit HTML and the
+  browser SDK, and the repeated load-event-gated render showed current PTY
+  `210c7337`, Launcher `93f26dfd`, exact semantic TUI handoff, and no emoji.

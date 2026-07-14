@@ -65,11 +65,13 @@ test("Surface Hub launch targets are credential-free and TUI continuation is she
     { id: "project-'one", root_path: "/tmp/Floyd's work" },
     { session_id: "session-'one", run_id: "run-1", last_event_id: "42" },
   );
-  assert.equal(command, "cd -- '/tmp/Floyd'\"'\"'s work' && '/usr/bin/env' node '/Volumes/Storage/FLOYD_WORKSTATION/clients/cli/src/main.ts' attach 'session-'\"'\"'one' '42' --run 'run-1'");
+  assert.equal(command, "cd -- '/tmp/Floyd'\"'\"'s work' && '/Volumes/Storage/FLOYD_RUNTIME/bin/floyd-tui' floyd --project-id 'project-'\"'\"'one' --session 'session-'\"'\"'one' --run 'run-1' --event '42'");
   assert.equal(helpers.continuationCommand(null, null), null);
   assert.doesNotMatch(command!, /(token|api[_-]?key|credential|secret)/i);
-  assert.match(command!, /attach 'session-/);
+  assert.match(command!, /floyd --project-id/);
+  assert.match(command!, /--session 'session-/);
   assert.match(command!, /--run 'run-1'/);
+  assert.match(command!, /--event '42'/);
 });
 
 test("Surface Hub reports Core-restored continuity and the honest remote loopback boundary", () => {
@@ -168,6 +170,30 @@ test("cockpit OAuth callback parsing fails closed and connector input keeps secr
   assert.deepEqual(profile.scopes, ["openid", "models"]);
   assert.equal(profile.clientAuth, "client_secret_post");
   assert.doesNotMatch(html, /(sessionStorage|localStorage)\.setItem\([^\n]*(connector|credential|clientSecret|modelKey)/);
+  const capture = html.slice(html.indexOf("const hadOAuthCallbackParams"), html.indexOf("const token ="));
+  assert.match(capture, /query\.delete\("state"\)/);
+  assert.match(capture, /history\.replaceState/);
+  assert.ok(html.indexOf("const hadOAuthCallbackParams") < html.indexOf("await refreshHealth\(\)"));
+  const completion = html.slice(html.indexOf("async function completeOAuthCallback"), html.indexOf("function shellQuote"));
+  assert.doesNotMatch(completion.slice(completion.indexOf("await client.completeConnectorOAuth")), /query\.delete\("state"\)/);
+});
+
+test("cockpit model stream requires an explicit terminal event and surfaces exact errors", async () => {
+  const start = html.indexOf("async function consumeModelStream");
+  const end = html.indexOf("async function sendPrompt", start);
+  const consume = new Function(`${html.slice(start, end)}; return consumeModelStream;`)() as (
+    events: AsyncIterable<{ type: string; data: Record<string, unknown> }>,
+    onDelta: (text: string) => void,
+  ) => Promise<void>;
+  const stream = (values: Array<{ type: string; data: Record<string, unknown> }>) => (async function* () { yield* values; })();
+  const deltas: string[] = [];
+  await consume(stream([{ type: "delta", data: { text: "ok" } }, { type: "done", data: {} }]), (text) => deltas.push(text));
+  assert.deepEqual(deltas, ["ok"]);
+  await assert.rejects(
+    consume(stream([{ type: "error", data: { error: { message: "vendor denied", code: "rate_limit" } } }]), () => {}),
+    /vendor denied.*rate_limit/,
+  );
+  await assert.rejects(consume(stream([{ type: "delta", data: { text: "partial" } }]), () => {}), /before a terminal done or error/);
 });
 
 test("cockpit restores and publishes the portable Core experience envelope", () => {

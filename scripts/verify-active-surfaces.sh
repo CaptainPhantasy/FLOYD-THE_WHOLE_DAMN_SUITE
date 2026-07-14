@@ -50,9 +50,45 @@ if (!response.ok || health.ok !== true || health.engine?.ok !== true) {
   throw new Error(`Floyd Core health failed: HTTP ${response.status} ${JSON.stringify(health)}`);
 }
 process.stdout.write(`core\t${health.pid}\topencode\t${health.engine.pid}\n`);
+
+const discoveryResponse = await fetch("http://127.0.0.1:41414/api/surfaces", {
+  headers: { authorization: `Bearer ${token}` },
+});
+const discovery = await discoveryResponse.json();
+const expectedIds = ["desktop", "ide", "pty", "launcher"];
+if (!discoveryResponse.ok || !Array.isArray(discovery.surfaces)
+  || JSON.stringify(discovery.surfaces.map(surface => surface.id)) !== JSON.stringify(expectedIds)
+  || discovery.surfaces.some(surface => surface.verified !== true)) {
+  throw new Error(`admitted surface discovery failed: HTTP ${discoveryResponse.status} ${JSON.stringify(discovery)}`);
+}
+for (const surface of discovery.surfaces) {
+  process.stdout.write(`surface-discovery\t${surface.id}\t${surface.reason}\n`);
+}
 NODE
 
 tab=$(printf '\t')
+node --input-type=module - "$MANIFEST" <<'NODE' | while IFS="$tab" read -r id copy port; do
+import { readFile } from "node:fs/promises";
+const manifest = JSON.parse(await readFile(process.argv[2], "utf8"));
+for (const surface of manifest.surfaces.filter(surface => surface.integration?.admitted_runtime_url)) {
+  const port = new URL(surface.integration.admitted_runtime_url).port;
+  process.stdout.write(`${surface.id}\t${surface.intake_copy}\t${port}\n`);
+}
+NODE
+  pid=$(lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null | sed -n '1p')
+  [ -n "$pid" ] || {
+    printf '%s has no admitted listener on %s\n' "$id" "$port" >&2
+    exit 1
+  }
+  cwd=$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')
+  [ "$cwd" = "$copy" ] || {
+    printf '%s listener %s has wrong cwd: %s\n' "$id" "$pid" "$cwd" >&2
+    exit 1
+  }
+  launchctl print "gui/$(id -u)/com.floyd.surface.$id" >/dev/null
+  printf 'surface-runtime\t%s\t%s\t%s\n' "$id" "$pid" "$cwd"
+done
+
 node --input-type=module - "$MANIFEST" <<'NODE' | while IFS="$tab" read -r id copy expected_head; do
 import { readFile } from "node:fs/promises";
 const manifest = JSON.parse(await readFile(process.argv[2], "utf8"));

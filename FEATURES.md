@@ -12,12 +12,16 @@
 | Deep-link and QR handoff | In progress | Private HTTPS fragment link, inert local SVG QR, independently mutable session snapshot, idempotently recoverable consume-once pairing, and cookie-auth tests pass; a physical second-device scan remains |
 | Private remote attach | In progress | Separate 41416 allowlisted listener and Tailscale HTTPS 8443 are live; scoped attach, out-of-bound denial, logout, and stream revocation pass, but a second physical tailnet-device proof remains |
 | Connector/OAuth authority | In progress | AES-GCM API-key/OAuth storage, PKCE, refresh/revoke, endpoint-bound relay references, SDK parity, and mock lifecycle tests pass; real-provider OAuth proof remains |
-| Five-surface local continuity | Preview baseline | Desktop, IDE, TUI, TerminalOne, and launcher commits are pinned for local developer testing; semantic/transport ownership is explicit |
+| Five-surface local continuity | Preview baseline | Desktop, IDE, TUI, TerminalOne, and launcher commits are pinned for local developer testing; exact TUI project/session/run/event handoff and semantic/transport ownership are explicit |
 | Unified private remote experience | In progress | Cockpit QR/private attach is implemented; physical second-device proof and native secure storage remain |
 
 “Shipped” means direct implementation and named verification exist. “In
 progress” and “Not shipped” are deliberately visible so partial architecture is
 not presented as the completed ecosystem.
+
+“Preview baseline” is an intermediate hands-on test milestone. The active
+objective remains a maintained, seamless experience across every admitted Floyd
+application; no connected-application requirement is deferred by that label.
 
 Surface continuity boundaries and the difference from cross-vendor application
 federation are documented in `docs/SURFACE_CONTINUITY.md`.

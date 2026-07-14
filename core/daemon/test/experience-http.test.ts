@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { once } from "node:events";
@@ -67,11 +67,15 @@ const engine = {
   replyQuestion: async () => {},
   steer: async () => {},
 } as never;
+const surfaceManifest = JSON.parse(readFileSync(join(import.meta.dirname, "../../../ecosystem/surfaces.json"), "utf8")) as {
+  surfaces: Array<{ id: string; integration: { commit: string } }>;
+};
+const surfaceCommit = (id: string) => surfaceManifest.surfaces.find((surface) => surface.id === id)!.integration.commit;
 const expectedSurfaceIdentity = new Map([
-  ["http://127.0.0.1:13010/api/health", { surface_id: "desktop", source_root: "/Volumes/Storage/FLOYD_WORKSTATION/intake/surfaces/desktop", source_commit: "521e8aa24e3bb3375444a6581e49e99d2f49e8ba" }],
-  ["http://127.0.0.1:13012/api/health", { surface_id: "ide", source_root: "/Volumes/Storage/FLOYD_WORKSTATION/intake/surfaces/ide", source_commit: "6e974bdaa2e318d37bb6bc2aa9255f6f260fa516" }],
-  ["http://127.0.0.1:13013/health", { surface_id: "pty", source_root: "/Volumes/Storage/FLOYD_WORKSTATION/intake/surfaces/pty", source_commit: "dcf96e53749613c4cc8d98b8a78773148f518e4d" }],
-  ["http://127.0.0.1:13014/health", { surface_id: "launcher", source_root: "/Volumes/Storage/FLOYD_WORKSTATION/intake/surfaces/launcher", source_commit: "ec65bb18f35329781c04501d246cc80671d84269" }],
+  ["http://127.0.0.1:13010/api/health", { surface_id: "desktop", source_root: "/Volumes/Storage/FLOYD_WORKSTATION/intake/surfaces/desktop", source_commit: surfaceCommit("desktop") }],
+  ["http://127.0.0.1:13012/api/health", { surface_id: "ide", source_root: "/Volumes/Storage/FLOYD_WORKSTATION/intake/surfaces/ide", source_commit: surfaceCommit("ide") }],
+  ["http://127.0.0.1:13013/health", { surface_id: "pty", source_root: "/Volumes/Storage/FLOYD_WORKSTATION/intake/surfaces/pty", source_commit: surfaceCommit("pty") }],
+  ["http://127.0.0.1:13014/health", { surface_id: "launcher", source_root: "/Volumes/Storage/FLOYD_WORKSTATION/intake/surfaces/launcher", source_commit: surfaceCommit("launcher") }],
 ]);
 const observedSurfaceHealthUrls: string[] = [];
 let mismatchedSurfaceId: string | null = null;
@@ -176,6 +180,15 @@ test("Core surface discovery probes only fixed admitted URLs and fails closed on
     reason: "Health responded without the required admitted source identity.",
   });
   mismatchedSurfaceId = null;
+});
+
+test("Cockpit and browser SDK cannot be reused from a stale browser cache after Core restart", async () => {
+  for (const path of ["/", "/floyd-sdk.js"]) {
+    const response = await fetch(`${baseUrl}${path}`);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    await response.body?.cancel();
+  }
 });
 
 test("HTTP experience integration negotiates, streams, updates, and preserves conflicts", async () => {

@@ -70,6 +70,47 @@
 - Launcher browser shells now require a short-lived, single-use same-origin
   WebSocket ticket before allocating a PTY. Its cold `npm test` owns server
   startup, readiness, and shutdown instead of assuming port 11000 is prebound.
+- The admitted TUI now reconnects its Experience stream after Core restarts,
+  restores authoritative state even after revision rollback, advertises its
+  transcript/cursor capabilities, and preserves divergent local drafts.
+- Desktop and IDE now preserve divergent local drafts, reconnect with a fresh
+  authoritative restore, parse split SSE frames, and expose selected artifacts,
+  pending questions, pending permissions, and the active provider/model route.
+- The admitted TUI restores the selected artifact, pending questions,
+  pending permissions, and provider/model route while sanitizing terminal
+  control bytes and bounding rendered artifact content.
+- TerminalOne resolves the Core-owned project before continuation and launches
+  the admitted TUI from the canonical project root with an explicit project ID.
+  Launcher attach commands carry the active run ID and recover their Experience
+  watch after Core restarts.
+- The root CLI accepts `floyd attach <session> [seq] --run <run>` so transport
+  surfaces cannot accidentally resume a newer run in the same session.
+- Desktop, IDE, and TUI semantic coding streams now treat unexpected EOF as an
+  interruption, restore durable Core truth, and resume from the last observed
+  run-scoped event ID. Partial output is never promoted to a completed answer.
+- TUI answers, permission responses, and artifact reads now abort on context
+  changes; artifact work no longer serially blocks later envelope revisions,
+  and model-route changes update the running terminal header.
+- Admitted browser copies use a dedicated loopback port block (13010–13014)
+  instead of the separately preserved donor processes and their claimed ports.
+- The admitted TUI accepts an exact `--session`, `--run`, and optional `--event`
+  handoff, validates it against the Core project selected by the current working
+  directory, and reuses the reconnecting semantic session lifecycle instead of
+  falling back to a raw CLI stream.
+- TerminalOne resolves and validates the Core-owned project/session/run before
+  writing that exact semantic TUI handoff into its PTY; missing or mismatched
+  context fails closed instead of degrading to `--continue`.
+- Provider streams that end without an explicit vendor terminal frame now emit
+  `upstream_stream_incomplete`; both SDKs and the Cockpit reject bare EOF rather
+  than presenting partial paid output as a successful answer.
+- Cockpit OAuth callback parameters are captured and removed from the address
+  bar before health, state, connector exchange, or any other awaited work.
+- Admitted LaunchAgents derive their runtime identity from each copy's actual
+  Git HEAD, while Core loads the expected commit from the locked surface
+  manifest at startup. A mismatch remains fail-closed.
+- Cockpit HTML and the browser SDK are served with `Cache-Control: no-store`,
+  preventing an existing developer browser from resurrecting a stale surface
+  contract after Core restarts on a newer checkout.
 
 ### Security
 

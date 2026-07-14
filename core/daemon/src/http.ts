@@ -35,8 +35,21 @@ import type {
   ExperienceNegotiationRequest,
 } from "@floyd/contracts";
 
-const COCKPIT_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "apps", "cockpit", "public");
-const BROWSER_SDK = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "packages", "sdk", "browser", "floyd-sdk.js");
+const ROOT_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+const COCKPIT_DIR = join(ROOT_DIR, "apps", "cockpit", "public");
+const BROWSER_SDK = join(ROOT_DIR, "packages", "sdk", "browser", "floyd-sdk.js");
+const SURFACE_MANIFEST = join(ROOT_DIR, "ecosystem", "surfaces.json");
+
+function admittedSurfaceCommit(id: string): string {
+  const manifest = JSON.parse(readFileSync(SURFACE_MANIFEST, "utf8")) as {
+    surfaces?: Array<{ id?: unknown; integration?: { commit?: unknown } }>;
+  };
+  const commit = manifest.surfaces?.find((surface) => surface.id === id)?.integration?.commit;
+  if (typeof commit !== "string" || !/^[a-f0-9]{40}$/.test(commit)) {
+    throw new Error(`invalid admitted commit for ${id} in ${SURFACE_MANIFEST}`);
+  }
+  return commit;
+}
 
 const SURFACE_HEALTH_TIMEOUT_MS = 1_500;
 const SURFACE_HEALTH_MAX_BYTES = 32 * 1024;
@@ -46,28 +59,28 @@ const ADMITTED_SURFACES = Object.freeze([
     target: "http://127.0.0.1:13010/",
     healthUrl: "http://127.0.0.1:13010/api/health",
     sourceRoot: "/Volumes/Storage/FLOYD_WORKSTATION/intake/surfaces/desktop",
-    sourceCommit: "521e8aa24e3bb3375444a6581e49e99d2f49e8ba",
+    sourceCommit: admittedSurfaceCommit("desktop"),
   },
   {
     id: "ide",
     target: "http://127.0.0.1:13012/",
     healthUrl: "http://127.0.0.1:13012/api/health",
     sourceRoot: "/Volumes/Storage/FLOYD_WORKSTATION/intake/surfaces/ide",
-    sourceCommit: "6e974bdaa2e318d37bb6bc2aa9255f6f260fa516",
+    sourceCommit: admittedSurfaceCommit("ide"),
   },
   {
     id: "pty",
     target: "http://127.0.0.1:13013/",
     healthUrl: "http://127.0.0.1:13013/health",
     sourceRoot: "/Volumes/Storage/FLOYD_WORKSTATION/intake/surfaces/pty",
-    sourceCommit: "dcf96e53749613c4cc8d98b8a78773148f518e4d",
+    sourceCommit: admittedSurfaceCommit("pty"),
   },
   {
     id: "launcher",
     target: "http://127.0.0.1:13014/",
     healthUrl: "http://127.0.0.1:13014/health",
     sourceRoot: "/Volumes/Storage/FLOYD_WORKSTATION/intake/surfaces/launcher",
-    sourceCommit: "ec65bb18f35329781c04501d246cc80671d84269",
+    sourceCommit: admittedSurfaceCommit("launcher"),
   },
 ]);
 
@@ -1537,6 +1550,10 @@ function createGateway(
 
       // ---------- cockpit static ----------
       if (isStatic) {
+        // Cockpit and its browser SDK are served directly from the active Core
+        // checkout. Never let a long-lived developer tab resurrect an older UI
+        // or continuity contract after Core has restarted on a new commit.
+        res.setHeader("cache-control", "no-store");
         if (path === "/floyd-sdk.js") {
           return send(res, 200, readFileSync(BROWSER_SDK, "utf8"), "text/javascript; charset=utf-8");
         }
