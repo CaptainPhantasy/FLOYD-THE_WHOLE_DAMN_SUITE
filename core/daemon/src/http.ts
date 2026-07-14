@@ -1,11 +1,22 @@
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { createServer, request as requestHttp, type IncomingHttpHeaders, type IncomingMessage, type ServerResponse } from "node:http";
 import { randomUUID } from "node:crypto";
 import { readFileSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { Duplex } from "node:stream";
 import type { Db } from "./db.ts";
 import type { OpenCodeEngine } from "./engine.ts";
-import { CORE_PORT, LOOPBACK, REMOTE_CORE_PORT, REMOTE_PUBLIC_ORIGIN, gatewayToken, nowIso, newId } from "./config.ts";
+import {
+  CORE_PORT,
+  LOOPBACK,
+  REMOTE_CORE_PORT,
+  REMOTE_PUBLIC_ORIGIN,
+  REMOTE_SURFACE_PUBLIC_PORTS,
+  REMOTE_SURFACE_RELAY_PORTS,
+  gatewayToken,
+  nowIso,
+  newId,
+} from "./config.ts";
 import { PATHS } from "./config.ts";
 import { appendEvidence, listEvidence } from "./evidence.ts";
 import { createRun, executeRun, decideRun, getRunDetail, readRunArtifact } from "./runs.ts";
@@ -60,6 +71,9 @@ const ADMITTED_SURFACES = Object.freeze([
     healthUrl: "http://127.0.0.1:13010/api/health",
     sourceRoot: "/Volumes/Storage/FLOYD_WORKSTATION/intake/surfaces/desktop",
     sourceCommit: admittedSurfaceCommit("desktop"),
+    remoteRelayPort: REMOTE_SURFACE_RELAY_PORTS.desktop,
+    remotePublicPort: REMOTE_SURFACE_PUBLIC_PORTS.desktop,
+    launchPath: "/",
   },
   {
     id: "ide",
@@ -67,6 +81,9 @@ const ADMITTED_SURFACES = Object.freeze([
     healthUrl: "http://127.0.0.1:13012/api/health",
     sourceRoot: "/Volumes/Storage/FLOYD_WORKSTATION/intake/surfaces/ide",
     sourceCommit: admittedSurfaceCommit("ide"),
+    remoteRelayPort: REMOTE_SURFACE_RELAY_PORTS.ide,
+    remotePublicPort: REMOTE_SURFACE_PUBLIC_PORTS.ide,
+    launchPath: "/mwide/",
   },
   {
     id: "pty",
@@ -74,6 +91,9 @@ const ADMITTED_SURFACES = Object.freeze([
     healthUrl: "http://127.0.0.1:13013/health",
     sourceRoot: "/Volumes/Storage/FLOYD_WORKSTATION/intake/surfaces/pty",
     sourceCommit: admittedSurfaceCommit("pty"),
+    remoteRelayPort: REMOTE_SURFACE_RELAY_PORTS.pty,
+    remotePublicPort: REMOTE_SURFACE_PUBLIC_PORTS.pty,
+    launchPath: "/",
   },
   {
     id: "launcher",
@@ -81,8 +101,23 @@ const ADMITTED_SURFACES = Object.freeze([
     healthUrl: "http://127.0.0.1:13014/health",
     sourceRoot: "/Volumes/Storage/FLOYD_WORKSTATION/intake/surfaces/launcher",
     sourceCommit: admittedSurfaceCommit("launcher"),
+    remoteRelayPort: REMOTE_SURFACE_RELAY_PORTS.launcher,
+    remotePublicPort: REMOTE_SURFACE_PUBLIC_PORTS.launcher,
+    launchPath: "/",
   },
 ]);
+
+type AdmittedSurface = (typeof ADMITTED_SURFACES)[number];
+
+function remoteSurfaceOrigin(surface: AdmittedSurface): string {
+  const origin = new URL(REMOTE_PUBLIC_ORIGIN);
+  origin.port = String(surface.remotePublicPort);
+  return origin.origin;
+}
+
+function remoteSurfaceTarget(surface: AdmittedSurface): string {
+  return new URL(surface.launchPath, `${remoteSurfaceOrigin(surface)}/`).href;
+}
 
 type SurfaceHealthFetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
@@ -173,6 +208,7 @@ type ExperienceSseClient = { res: ServerResponse; envelope_id: string; principal
 const experienceClients = new Set<ExperienceSseClient>();
 type RemotePrincipal = ReturnType<ExperienceSecurityService["authenticateDeviceSession"]>;
 const remoteStreams = new Map<string, Set<ServerResponse>>();
+const remoteSurfaceSockets = new Map<string, Set<Duplex>>();
 
 function registerRemoteStream(res: ServerResponse, principal: RemotePrincipal): void {
   const current = remoteStreams.get(principal.sessionId) ?? new Set<ServerResponse>();
@@ -198,7 +234,26 @@ function closeRemoteStreams(sessionIds: readonly string[]): void {
   for (const sessionId of sessionIds) {
     for (const response of remoteStreams.get(sessionId) ?? []) response.destroy(new Error("device session revoked"));
     remoteStreams.delete(sessionId);
+    for (const socket of remoteSurfaceSockets.get(sessionId) ?? []) socket.destroy(new Error("device session revoked"));
+    remoteSurfaceSockets.delete(sessionId);
   }
+}
+
+function registerRemoteSurfaceSocket(socket: Duplex, principal: RemotePrincipal): void {
+  const sockets = remoteSurfaceSockets.get(principal.sessionId) ?? new Set<Duplex>();
+  if (sockets.size >= 4) {
+    throw new ExperienceSecurityError("scope_denied", "device session remote terminal limit exceeded", 429);
+  }
+  sockets.add(socket);
+  remoteSurfaceSockets.set(principal.sessionId, sockets);
+  const delay = Math.max(1, Date.parse(principal.expiresAt) - Date.now());
+  const expiry = setTimeout(() => socket.destroy(new Error("device session expired")), delay);
+  expiry.unref();
+  socket.once("close", () => {
+    clearTimeout(expiry);
+    sockets.delete(socket);
+    if (sockets.size === 0) remoteSurfaceSockets.delete(principal.sessionId);
+  });
 }
 
 function sanitizeRemoteEnvelope(envelope: ExperienceEnvelope): Record<string, unknown> {
@@ -552,6 +607,7 @@ function clearDeviceSessionCookie(res: ServerResponse): void {
 function remoteRouteScope(method: string | undefined, path: string): ExperienceDeviceSessionScope | null | undefined {
   if (method === "GET" && path === "/api/health") return "health:read";
   if (method === "GET" && path === "/api/state") return "state:read";
+  if (method === "GET" && path === "/api/surfaces") return "surface:access";
   if (method === "POST" && path === "/api/experience/negotiate") return "experience:write";
   if (/^\/api\/experience\/[^/]+$/.test(path)) return method === "GET" ? "experience:read" : method === "PATCH" ? "experience:write" : undefined;
   if (method === "GET" && /^\/api\/experience\/[^/]+\/stream$/.test(path)) return "experience:read";
@@ -697,6 +753,8 @@ function createGateway(
       res.setHeader("referrer-policy", "no-referrer");
       res.setHeader("x-content-type-options", "nosniff");
       res.setHeader("x-frame-options", "DENY");
+      res.setHeader("content-security-policy", "frame-ancestors 'none'");
+      res.setHeader("strict-transport-security", "max-age=31536000");
     }
 
     // /gateway reserves Authorization and x-api-key for the upstream provider,
@@ -724,9 +782,10 @@ function createGateway(
       ? req.headers["x-floyd-token"][0]
       : req.headers["x-floyd-token"];
     const bearerAuth = req.headers.authorization?.replace(/^Bearer\s+/i, "") ?? "";
+    const deviceCookie = boundary === "remote" ? cookieValue(req, DEVICE_SESSION_COOKIE) : "";
     const auth = isProviderGateway
       ? gatewayAuth ?? ""
-      : bearerAuth || (boundary === "remote" ? cookieValue(req, DEVICE_SESSION_COOKIE) : "");
+      : bearerAuth || deviceCookie;
     const isStatic = !path.startsWith("/api/") && !isProviderGateway;
     const selfAuthenticating = req.method === "POST"
       && (path === "/api/devices/authenticate" || path === "/api/handoffs/consume" || path === "/api/handoffs/pair");
@@ -780,6 +839,14 @@ function createGateway(
         if (error instanceof ExperienceSecurityError) return send(res, error.httpStatus, { error: error.code, message: error.message });
         return send(res, 500, { error: "device session authentication failed" });
       }
+      if (!bearerAuth && deviceCookie && !["GET", "HEAD", "OPTIONS"].includes(req.method ?? "")) {
+        if (req.headers.origin !== REMOTE_PUBLIC_ORIGIN) {
+          return send(res, 403, { error: "cookie-authenticated mutation requires the configured remote Origin" });
+        }
+        if (req.headers["sec-fetch-site"] && req.headers["sec-fetch-site"] !== "same-origin") {
+          return send(res, 403, { error: "cookie-authenticated mutation requires a same-origin browser request" });
+        }
+      }
     }
 
     try {
@@ -819,7 +886,15 @@ function createGateway(
       if (path === "/api/surfaces" && req.method === "GET") {
         res.setHeader("cache-control", "no-store");
         const surfaceHealthFetch = dependencies.surfaceHealthFetch ?? globalThis.fetch.bind(globalThis);
-        return send(res, 200, { surfaces: await discoverAdmittedSurfaces(surfaceHealthFetch, requestAbortSignal(req, res)) });
+        const surfaces = await discoverAdmittedSurfaces(surfaceHealthFetch, requestAbortSignal(req, res));
+        return send(res, 200, {
+          surfaces: boundary === "remote"
+            ? surfaces.map((result) => {
+              const surface = ADMITTED_SURFACES.find((candidate) => candidate.id === result.id)!;
+              return { ...result, target: remoteSurfaceTarget(surface) };
+            })
+            : surfaces,
+        });
       }
       if (path === "/api/connectors" && req.method === "GET") {
         res.setHeader("cache-control", "no-store");
@@ -1615,4 +1690,217 @@ export function startGateway(
 
 export function startRemoteGateway(db: Db, engine: OpenCodeEngine, corePid: number, startedAt: string): ReturnType<typeof createServer> {
   return createGateway(db, engine, corePid, startedAt, "remote");
+}
+
+const HOP_BY_HOP_HEADERS = new Set([
+  "connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade",
+]);
+const PRIVATE_RELAY_HEADERS = new Set([
+  "authorization", "cookie", "host", "origin", "referer", "x-api-key", "x-floyd-token", "x-forwarded-for", "x-forwarded-host",
+  "x-forwarded-port", "x-forwarded-proto", "x-real-ip",
+]);
+
+type RemoteSurfaceGatewayDependencies = {
+  /** Tests may replace fixed loopback ports without changing the production registry. */
+  relayPorts?: Partial<Record<AdmittedSurface["id"], number>>;
+  upstreamTargets?: Partial<Record<AdmittedSurface["id"], string>>;
+  surfaceHealthFetch?: SurfaceHealthFetch;
+};
+
+function relayRequestHeaders(headers: IncomingHttpHeaders, upstream: URL): IncomingHttpHeaders {
+  const forwarded: IncomingHttpHeaders = {};
+  for (const [name, value] of Object.entries(headers)) {
+    const lower = name.toLowerCase();
+    if (HOP_BY_HOP_HEADERS.has(lower) || PRIVATE_RELAY_HEADERS.has(lower) || lower.startsWith("sec-websocket-")) continue;
+    if (value !== undefined) forwarded[lower] = value;
+  }
+  forwarded.host = upstream.host;
+  if (headers.origin) forwarded.origin = upstream.origin;
+  return forwarded;
+}
+
+function relayResponseHeaders(headers: IncomingHttpHeaders, surface: AdmittedSurface, upstream: URL): IncomingHttpHeaders {
+  const forwarded: IncomingHttpHeaders = {};
+  for (const [name, value] of Object.entries(headers)) {
+    const lower = name.toLowerCase();
+    if (HOP_BY_HOP_HEADERS.has(lower) || lower === "set-cookie" || lower === "x-frame-options" || lower === "content-security-policy") continue;
+    if (lower === "location" && typeof value === "string") {
+      try {
+        const location = new URL(value, upstream);
+        forwarded.location = location.origin === upstream.origin
+          ? new URL(`${location.pathname}${location.search}${location.hash}`, `${remoteSurfaceOrigin(surface)}/`).href
+          : value;
+      } catch { forwarded.location = value; }
+      continue;
+    }
+    if (value !== undefined) forwarded[lower] = value;
+  }
+  forwarded["content-security-policy"] = `frame-ancestors ${REMOTE_PUBLIC_ORIGIN}`;
+  forwarded["referrer-policy"] = "no-referrer";
+  forwarded["x-content-type-options"] = "nosniff";
+  forwarded["strict-transport-security"] = "max-age=31536000";
+  return forwarded;
+}
+
+function rawSocketResponse(socket: Duplex, status: number, message: string): void {
+  const body = JSON.stringify({ error: message });
+  socket.end(
+    `HTTP/1.1 ${status} ${status === 401 ? "Unauthorized" : status === 403 ? "Forbidden" : "Bad Gateway"}\r\n`
+    + "Content-Type: application/json\r\nConnection: close\r\n"
+    + `Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`,
+  );
+}
+
+function exactRelayOrigin(req: IncomingMessage, surface: AdmittedSurface): boolean {
+  return req.headers.origin === remoteSurfaceOrigin(surface)
+    && (!req.headers["sec-fetch-site"] || req.headers["sec-fetch-site"] === "same-origin");
+}
+
+/**
+ * Start one loopback-only authenticated relay per admitted application. Tailscale
+ * terminates HTTPS on the matching public ports; the host-only device cookie is
+ * therefore shared without exposing a credential to JavaScript. Every request
+ * is re-authenticated and every WebSocket is registered for expiry/revocation.
+ */
+export function startRemoteSurfaceGateways(
+  db: Db,
+  dependencies: RemoteSurfaceGatewayDependencies = {},
+): Array<{ id: AdmittedSurface["id"]; server: ReturnType<typeof createServer>; relayPort: number; publicOrigin: string }> {
+  const security = new ExperienceSecurityService(db, {
+    masterKeyPath: PATHS.experienceMasterKey,
+    evidence: (event) => appendEvidence(db, event.type, event.actor, event.payload),
+    sessionInvalidated: closeRemoteStreams,
+  });
+  const healthFetch = dependencies.surfaceHealthFetch ?? globalThis.fetch.bind(globalThis);
+  const verifiedUntil = new Map<AdmittedSurface["id"], number>();
+
+  const verifySurface = async (surface: AdmittedSurface): Promise<void> => {
+    if ((verifiedUntil.get(surface.id) ?? 0) > Date.now()) return;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(new Error("surface identity timeout")), SURFACE_HEALTH_TIMEOUT_MS);
+    timeout.unref();
+    try {
+      const result = await probeAdmittedSurface(surface, healthFetch, controller.signal);
+      if (result.verified !== true) throw new ExperienceSecurityError("scope_denied", String(result.reason), 503);
+      verifiedUntil.set(surface.id, Date.now() + 1_000);
+    } finally {
+      clearTimeout(timeout);
+    }
+  };
+
+  return ADMITTED_SURFACES.map((surface) => {
+    const upstream = new URL(dependencies.upstreamTargets?.[surface.id] ?? surface.target);
+    const relayPort = dependencies.relayPorts?.[surface.id] ?? surface.remoteRelayPort;
+    const authenticate = (req: IncomingMessage): RemotePrincipal => {
+      const bearer = req.headers.authorization?.replace(/^Bearer\s+/i, "") ?? "";
+      const credential = bearer || cookieValue(req, DEVICE_SESSION_COOKIE);
+      if (!credential || credential === gatewayToken()) {
+        throw new ExperienceSecurityError("device_session_invalid", "remote surface requires a device session", 401);
+      }
+      return security.authenticateDeviceSession(credential, "surface:access");
+    };
+
+    const server = createServer(async (req, res) => {
+      let principal: RemotePrincipal;
+      try {
+        principal = authenticate(req);
+        if (!["GET", "HEAD", "OPTIONS"].includes(req.method ?? "") && !req.headers.authorization && !exactRelayOrigin(req, surface)) {
+          throw new ExperienceSecurityError("scope_denied", "remote surface mutation requires its exact browser Origin", 403);
+        }
+        await verifySurface(surface);
+      } catch (error) {
+        const status = error instanceof ExperienceSecurityError ? error.httpStatus : 503;
+        return send(res, status, { error: error instanceof ExperienceSecurityError ? error.code : "surface_unavailable", message: String(error) });
+      }
+
+      const upstreamRequest = requestHttp({
+        protocol: upstream.protocol,
+        hostname: upstream.hostname,
+        port: upstream.port,
+        method: req.method,
+        path: req.url,
+        headers: relayRequestHeaders(req.headers, upstream),
+      });
+      let settled = false;
+      const abort = () => {
+        if (!settled) upstreamRequest.destroy(new Error("remote surface client disconnected"));
+      };
+      req.once("aborted", abort);
+      res.once("close", abort);
+      upstreamRequest.once("response", (upstreamResponse) => {
+        res.writeHead(upstreamResponse.statusCode ?? 502, relayResponseHeaders(upstreamResponse.headers, surface, upstream));
+        upstreamResponse.once("error", (error) => res.destroy(error));
+        upstreamResponse.once("end", () => { settled = true; });
+        upstreamResponse.pipe(res);
+      });
+      upstreamRequest.once("error", (error) => {
+        settled = true;
+        if (!res.headersSent) send(res, 502, { error: "surface_upstream_failed", message: error.message });
+        else res.destroy(error);
+      });
+      req.pipe(upstreamRequest);
+      void principal;
+    });
+
+    server.on("upgrade", (req, socket, head) => {
+      void (async () => {
+        let principal: RemotePrincipal;
+        try {
+          principal = authenticate(req);
+          if (!exactRelayOrigin(req, surface)) throw new ExperienceSecurityError("scope_denied", "remote WebSocket requires its exact browser Origin", 403);
+          await verifySurface(surface);
+          registerRemoteSurfaceSocket(socket, principal);
+        } catch (error) {
+          const status = error instanceof ExperienceSecurityError ? error.httpStatus : 503;
+          rawSocketResponse(socket, status, error instanceof Error ? error.message : "surface unavailable");
+          return;
+        }
+
+        const headers = relayRequestHeaders(req.headers, upstream);
+        headers.connection = "Upgrade";
+        headers.upgrade = req.headers.upgrade ?? "websocket";
+        headers.origin = upstream.origin;
+        for (const name of ["sec-websocket-key", "sec-websocket-version", "sec-websocket-protocol", "sec-websocket-extensions"] as const) {
+          if (req.headers[name] !== undefined) headers[name] = req.headers[name];
+        }
+        const upstreamRequest = requestHttp({
+          protocol: upstream.protocol,
+          hostname: upstream.hostname,
+          port: upstream.port,
+          method: "GET",
+          path: req.url,
+          headers,
+        });
+        upstreamRequest.once("upgrade", (response, upstreamSocket, upstreamHead) => {
+          const lines = [`HTTP/1.1 ${response.statusCode ?? 101} ${response.statusMessage ?? "Switching Protocols"}`];
+          for (let index = 0; index < response.rawHeaders.length; index += 2) {
+            const name = response.rawHeaders[index]!;
+            if (name.toLowerCase() === "set-cookie") continue;
+            lines.push(`${name}: ${response.rawHeaders[index + 1] ?? ""}`);
+          }
+          socket.write(`${lines.join("\r\n")}\r\n\r\n`);
+          if (upstreamHead.length) socket.write(upstreamHead);
+          if (head.length) upstreamSocket.write(head);
+          socket.once("error", () => upstreamSocket.destroy());
+          upstreamSocket.once("error", () => socket.destroy());
+          socket.once("close", () => upstreamSocket.destroy());
+          upstreamSocket.once("close", () => socket.destroy());
+          socket.pipe(upstreamSocket);
+          upstreamSocket.pipe(socket);
+        });
+        upstreamRequest.once("response", (response) => {
+          rawSocketResponse(socket, response.statusCode ?? 502, `surface WebSocket refused with ${response.statusCode ?? 502}`);
+          response.resume();
+        });
+        upstreamRequest.once("error", (error) => socket.destroy(error));
+        upstreamRequest.end();
+      })();
+    });
+
+    server.headersTimeout = 10_000;
+    server.requestTimeout = 0;
+    server.keepAliveTimeout = 5_000;
+    server.listen(relayPort, LOOPBACK);
+    return { id: surface.id, server, relayPort, publicOrigin: remoteSurfaceOrigin(surface) };
+  });
 }

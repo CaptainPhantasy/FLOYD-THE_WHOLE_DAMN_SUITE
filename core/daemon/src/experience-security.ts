@@ -45,6 +45,7 @@ export const DEFAULT_HANDOFF_DEVICE_SCOPES: ExperienceDeviceSessionScope[] = [
   "run:read",
   "artifact:read",
   "evidence:read",
+  "surface:access",
 ];
 const EMPTY_RESOURCES: ExperienceDeviceSessionResources = {
   envelope_ids: [], project_ids: [], session_ids: [], run_ids: [], artifact_ids: [],

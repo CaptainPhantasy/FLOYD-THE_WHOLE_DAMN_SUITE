@@ -73,11 +73,26 @@ them in history.
 
 The admin HTTP listener remains loopback-only on port 41414 and authenticated
 by the Core token. A separate loopback listener on port 41416 is the remote
-boundary; the live host publishes only that boundary through Tailscale HTTPS
-on port 8443. The remote listener rejects the Core token and provider relay,
+boundary; the live host publishes that boundary through Tailscale HTTPS on
+port 8443. Four additional Core-owned loopback relays on ports 41420-41423 are
+published on private Tailscale HTTPS ports 8444-8447 for the admitted Desktop,
+IDE, PTY, and Launcher copies. No application port is published directly.
+The remote listener and relays reject the Core token and provider relay,
 accepts only short-lived device sessions, and applies an explicit route,
 capability, and resource allowlist. Tailscale is transport defense in depth,
 not application identity. Funnel/public exposure remains prohibited.
+
+`surface:access` is intentionally a broad single-developer grant: after fixed
+source-root/commit health verification, it carries the authenticated
+application's HTTP and WebSocket traffic to its loopback server. That includes
+the IDE's filesystem operations and the terminal applications' host-shell
+authority. The relay strips browser credentials before forwarding, rewrites
+the upstream Origin/Host to the fixed loopback target, requires the exact
+external Origin for cookie-authenticated mutations and WebSockets, terminates
+active sockets on expiry/revocation, and prevents upstream cookies from
+escaping. This is a testing baseline, not a least-privilege multi-user policy;
+remove `surface:access` from a handoff or revoke its device session to cut off
+all application authority.
 
 Permanent device credentials exchange for a default health-only session.
 Native handoff consumption atomically issues a session whose scopes are the

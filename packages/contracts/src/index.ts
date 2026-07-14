@@ -318,6 +318,8 @@ export const FLOYD_DEVICE_SESSION_SCOPES = [
   "run:read",
   "artifact:read",
   "evidence:read",
+  /** Grants an authenticated remote device the same host-app authority as the local developer UI. */
+  "surface:access",
 ] as const;
 
 export type ExperienceDeviceSessionScope = typeof FLOYD_DEVICE_SESSION_SCOPES[number];

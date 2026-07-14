@@ -45,7 +45,7 @@ test("Surface Hub launch targets are credential-free and TUI continuation is she
   const start = html.indexOf("function shellQuote");
   const end = html.indexOf("function activeSurfaceProject", start);
   assert.ok(start >= 0 && end > start);
-  const helpers = new Function(`${html.slice(start, end)}; return { shellQuote, safeSurfaceUrl, continuationCommand };`)() as {
+  const helpers = new Function(`const remoteMode = false; const app = { surfaceAvailability: new Map() }; const location = { hostname: "127.0.0.1" }; ${html.slice(start, end)}; return { shellQuote, safeSurfaceUrl, continuationCommand };`)() as {
     shellQuote: (value: string) => string;
     safeSurfaceUrl: (surface: Record<string, string>) => string;
     continuationCommand: (
@@ -74,7 +74,7 @@ test("Surface Hub launch targets are credential-free and TUI continuation is she
   assert.match(command!, /--event '42'/);
 });
 
-test("Surface Hub reports Core-restored continuity and the honest remote loopback boundary", () => {
+test("Surface Hub reports Core-restored continuity and the authenticated remote relay boundary", () => {
   assert.match(html, /Floyd unified workspace/);
   assert.match(html, /id="surfaceFrame"/);
   assert.match(html, /id="surfaceTabs"/);
@@ -82,10 +82,11 @@ test("Surface Hub reports Core-restored continuity and the honest remote loopbac
   assert.match(html, /app\.envelope\?\.active/);
   assert.match(html, /app\.envelope\?\.last_event_id/);
   assert.match(html, /Floyd Core remains the continuity authority/);
-  assert.match(html, /workstation loopback addresses do not refer to the remote device/);
-  assert.match(html, /does not federate third-party applications/);
+  assert.match(html, /every application request is device-session authenticated/);
+  assert.match(html, /revoke the device session to cut it off/);
   assert.match(html, /client\.request\("GET", "\/api\/surfaces", undefined, controller\.signal\)/);
-  assert.match(html, /entry\?\.id === surface\.id && entry\?\.target === surface\.target/);
+  assert.match(html, /entry\?\.id === surface\.id[\s\S]*remoteMode \|\| entry\?\.target === surface\.target/);
+  assert.doesNotMatch(html, /Remote continuation cannot verify or open workstation loopback applications/);
   assert.match(html, /data-surface-open=/);
   assert.match(html, /function openIntegratedSurface/);
   assert.match(html, /app\.surfaceAvailability\.get\(surface\.id\)\?\.verified !== true/);

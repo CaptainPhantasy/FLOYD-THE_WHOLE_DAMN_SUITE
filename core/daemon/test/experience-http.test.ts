@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { once } from "node:events";
 import { createServer } from "node:http";
+import { connect } from "node:net";
 
 const runtimeRoot = mkdtempSync(join(tmpdir(), "floyd-experience-http-"));
 process.env.FLOYD_RUNTIME_ROOT = runtimeRoot;
@@ -15,7 +16,7 @@ mkdirSync(join(runtimeRoot, "core"), { recursive: true, mode: 0o700 });
 
 const { openDb } = await import("../src/db.ts");
 const { gatewayToken } = await import("../src/config.ts");
-const { startGateway, startRemoteGateway, pumpSessionChannel, writeRunEvent } = await import("../src/http.ts");
+const { startGateway, startRemoteGateway, startRemoteSurfaceGateways, pumpSessionChannel, writeRunEvent } = await import("../src/http.ts");
 const { synchronizePendingInteractions } = await import("../src/experience.ts");
 const { putArtifact, linkRunArtifact } = await import("../src/artifacts.ts");
 
@@ -507,6 +508,111 @@ test("HTTP device and one-time handoff lifecycle returns the bound envelope", as
   ]);
   assert.equal(closed, true);
   assert.equal((await remoteApi("/api/experience/primary", streamSession.session.token)).status, 403);
+});
+
+test("remote surface relays require a scoped device session, strip credentials, and relay WebSocket teardown", async () => {
+  const enrollment = await api("/api/devices/enroll", {
+    method: "POST",
+    body: JSON.stringify({ device_id: "relay-device", metadata: { surface: "remote-relay-test" } }),
+  });
+  const device = await enrollment.json() as { device_id: string; secret: string };
+  const envelope = await (await api("/api/experience/primary")).json() as { revision: number };
+  const issue = await api("/api/handoffs", {
+    method: "POST",
+    body: JSON.stringify({ envelope_id: "primary", envelope_revision: envelope.revision }),
+  });
+  const handoff = await issue.json() as { token: string };
+  const consumed = await remoteSelfAuthenticatedPost("/api/handoffs/consume", {
+    token: handoff.token,
+    device_id: device.device_id,
+    device_secret: device.secret,
+  });
+  const session = await consumed.json() as { session: { token: string } };
+
+  let observedHeaders: Record<string, unknown> = {};
+  let observedBody = "";
+  const upgradedSockets = new Set<import("node:stream").Duplex>();
+  const upstream = createServer(async (req, res) => {
+    observedHeaders = req.headers;
+    for await (const chunk of req) observedBody += String(chunk);
+    res.writeHead(201, { "content-type": "application/json", "set-cookie": "upstream=must-not-escape" });
+    res.end(JSON.stringify({ ok: true }));
+  });
+  upstream.on("upgrade", (_req, socket) => {
+    upgradedSockets.add(socket);
+    socket.once("close", () => upgradedSockets.delete(socket));
+    socket.write("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n");
+    socket.on("data", (chunk) => socket.write(chunk));
+  });
+  upstream.listen(0, "127.0.0.1");
+  await once(upstream, "listening");
+  const upstreamAddress = upstream.address();
+  if (!upstreamAddress || typeof upstreamAddress === "string") throw new Error("surface test upstream did not bind TCP");
+  const target = `http://127.0.0.1:${upstreamAddress.port}/`;
+  const relays = startRemoteSurfaceGateways(db, {
+    relayPorts: { desktop: 0, ide: 0, pty: 0, launcher: 0 },
+    upstreamTargets: { desktop: target, ide: target, pty: target, launcher: target },
+    surfaceHealthFetch,
+  });
+  await Promise.all(relays.map(({ server }) => server.listening ? undefined : once(server, "listening")));
+  const desktopRelay = relays.find(({ id }) => id === "desktop")!.server;
+  const relayAddress = desktopRelay.address();
+  if (!relayAddress || typeof relayAddress === "string") throw new Error("surface relay did not bind TCP");
+  const relayBase = `http://127.0.0.1:${relayAddress.port}`;
+
+  try {
+    assert.equal((await fetch(`${relayBase}/probe`)).status, 401);
+    const response = await fetch(`${relayBase}/probe`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${session.session.token}`,
+        cookie: "sensitive=must-not-forward",
+        origin: "https://attacker.test",
+        "content-type": "text/plain",
+      },
+      body: "relay-body",
+    });
+    assert.equal(response.status, 201);
+    assert.deepEqual(await response.json(), { ok: true });
+    assert.equal(response.headers.get("set-cookie"), null);
+    assert.equal(response.headers.get("content-security-policy"), "frame-ancestors https://floyd.test");
+    assert.equal(observedHeaders.authorization, undefined);
+    assert.equal(observedHeaders.cookie, undefined);
+    assert.equal(observedHeaders.origin, target.slice(0, -1));
+    assert.equal(observedBody, "relay-body");
+
+    const hostileCookieMutation = await fetch(`${relayBase}/probe`, {
+      method: "POST",
+      headers: { cookie: `__Host-floyd_session=${session.session.token}`, origin: "https://attacker.test" },
+    });
+    assert.equal(hostileCookieMutation.status, 403);
+
+    const socket = connect(relayAddress.port, "127.0.0.1");
+    await once(socket, "connect");
+    socket.write(
+      "GET /ws HTTP/1.1\r\n"
+      + `Host: 127.0.0.1:${relayAddress.port}\r\n`
+      + "Connection: Upgrade\r\nUpgrade: websocket\r\n"
+      + "Sec-WebSocket-Key: dGVzdC1rZXk=\r\nSec-WebSocket-Version: 13\r\n"
+      + `Cookie: __Host-floyd_session=${session.session.token}\r\n`
+      + "Origin: https://floyd.test:8444\r\n\r\n",
+    );
+    let received = "";
+    while (!received.includes("\r\n\r\n")) received += String((await once(socket, "data"))[0]);
+    assert.match(received, /^HTTP\/1\.1 101/);
+    socket.write("relay-ws-probe");
+    while (!received.includes("relay-ws-probe")) received += String((await once(socket, "data"))[0]);
+    assert.match(received, /relay-ws-probe/);
+    socket.destroy();
+  } finally {
+    for (const socket of upgradedSockets) socket.destroy();
+    for (const { server: relay } of relays) {
+      relay.closeAllConnections();
+      await new Promise<void>((resolve) => relay.close(() => resolve()));
+    }
+    upstream.closeAllConnections();
+    await new Promise<void>((resolve) => upstream.close(() => resolve()));
+  }
 });
 
 test("HTTP connector authority keeps secrets opaque and injects only endpoint-bound references", async () => {

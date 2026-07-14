@@ -4,7 +4,7 @@ import { OpenCodeEngine } from "./engine.ts";
 import { appendEvidence } from "./evidence.ts";
 import { seed } from "./seed.ts";
 import { recoverInterrupted } from "./runs.ts";
-import { startGateway, startLiveChannel, startRemoteGateway } from "./http.ts";
+import { startGateway, startLiveChannel, startRemoteGateway, startRemoteSurfaceGateways } from "./http.ts";
 
 async function main(): Promise<void> {
   const startedAt = nowIso();
@@ -38,9 +38,14 @@ async function main(): Promise<void> {
 
   const localGateway = startGateway(db, engine, process.pid, startedAt);
   const remoteGateway = startRemoteGateway(db, engine, process.pid, startedAt);
+  const remoteSurfaceGateways = startRemoteSurfaceGateways(db);
   const live = startLiveChannel(db, engine);
   appendEvidence(db, "core.gateway_listening", "floyd-core", { url: `http://${LOOPBACK}:${CORE_PORT}`, live_channel: true });
   appendEvidence(db, "core.remote_gateway_listening", "floyd-core", { url: `http://${LOOPBACK}:${REMOTE_CORE_PORT}`, device_sessions: true });
+  appendEvidence(db, "core.remote_surface_gateways_listening", "floyd-core", {
+    surfaces: remoteSurfaceGateways.map(({ id, relayPort, publicOrigin }) => ({ id, relay: `http://${LOOPBACK}:${relayPort}`, public_origin: publicOrigin })),
+    device_sessions: true,
+  });
   console.log(`[floyd-core] up pid=${process.pid} gateway=http://${LOOPBACK}:${CORE_PORT} remote=http://${LOOPBACK}:${REMOTE_CORE_PORT} engine=${engine.baseUrl} (opencode ${version} pid=${pid})`);
 
   const shutdown = async (sig: string) => {
@@ -48,6 +53,7 @@ async function main(): Promise<void> {
     live.stop();
     localGateway.close();
     remoteGateway.close();
+    for (const { server } of remoteSurfaceGateways) server.close();
     await engine.stop();
     process.exit(0);
   };

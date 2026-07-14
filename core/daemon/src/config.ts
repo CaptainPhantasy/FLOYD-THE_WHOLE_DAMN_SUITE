@@ -13,6 +13,18 @@ export const REMOTE_CORE_PORT = Number(process.env.FLOYD_REMOTE_CORE_PORT ?? 414
 export const REMOTE_PUBLIC_ORIGIN = normalizeRemoteOrigin(
   process.env.FLOYD_REMOTE_ORIGIN ?? "https://douglass-mac-mini.tail58d565.ts.net:8443",
 );
+export const REMOTE_SURFACE_RELAY_PORTS = Object.freeze({
+  desktop: Number(process.env.FLOYD_REMOTE_DESKTOP_RELAY_PORT ?? 41420),
+  ide: Number(process.env.FLOYD_REMOTE_IDE_RELAY_PORT ?? 41421),
+  pty: Number(process.env.FLOYD_REMOTE_PTY_RELAY_PORT ?? 41422),
+  launcher: Number(process.env.FLOYD_REMOTE_LAUNCHER_RELAY_PORT ?? 41423),
+});
+export const REMOTE_SURFACE_PUBLIC_PORTS = Object.freeze({
+  desktop: Number(process.env.FLOYD_REMOTE_DESKTOP_PUBLIC_PORT ?? 8444),
+  ide: Number(process.env.FLOYD_REMOTE_IDE_PUBLIC_PORT ?? 8445),
+  pty: Number(process.env.FLOYD_REMOTE_PTY_PUBLIC_PORT ?? 8446),
+  launcher: Number(process.env.FLOYD_REMOTE_LAUNCHER_PUBLIC_PORT ?? 8447),
+});
 export const ENGINE_PORT = Number(process.env.FLOYD_ENGINE_PORT ?? 41415);
 export const LOOPBACK = "127.0.0.1";
 

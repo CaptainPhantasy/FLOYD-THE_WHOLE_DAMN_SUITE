@@ -889,9 +889,14 @@ function shellQuote(value) {
 }
 
 function safeSurfaceUrl(surface) {
-  const url = new URL(surface.target);
-  const loopback = ["127.0.0.1", "localhost", "::1"].includes(url.hostname);
-  if (surface.kind !== "url" || url.protocol !== "http:" || !loopback || url.username || url.password || url.search || url.hash) {
+  const discovered = app.surfaceAvailability.get(surface.id);
+  const url = new URL(remoteMode ? discovered?.target || "about:blank" : surface.target);
+  const localTarget = url.protocol === "http:" && ["127.0.0.1", "localhost", "::1"].includes(url.hostname)
+    && url.href === surface.target;
+  const remoteTarget = url.protocol === "https:" && url.hostname === location.hostname
+    && discovered?.verified === true && discovered?.target === url.href;
+  if (surface.kind !== "url" || !(remoteMode ? remoteTarget : localTarget)
+    || url.username || url.password || url.search || url.hash) {
     throw new Error(`Unsafe launch target for ${surface.id}.`);
   }
   return url.href;
@@ -919,6 +924,7 @@ function integratedSurfaceTarget(surface) {
       || !surfaceLaunchTarget(surface, activeSurfaceProject())) return null;
     const target = new URL(safeSurfaceUrl(terminal));
     target.searchParams.set("floyd", "continue");
+    if (remoteMode) target.searchParams.set("floyd_parent", location.origin);
     return target.href;
   }
   if (surface.id === "pty" && app.surfaceAvailability.get(surface.id)?.verified === true) {
@@ -927,10 +933,13 @@ function integratedSurfaceTarget(surface) {
     // current TerminalOne removes it before opening its WebSocket and does not
     // trigger semantic TUI continuation.
     target.searchParams.set("floyd", "integrated");
+    if (remoteMode) target.searchParams.set("floyd_parent", location.origin);
     return target.href;
   }
   if (surface.kind !== "url" || app.surfaceAvailability.get(surface.id)?.verified !== true) return null;
-  return safeSurfaceUrl(surface);
+  const target = new URL(safeSurfaceUrl(surface));
+  if (remoteMode && surface.id === "launcher") target.searchParams.set("floyd_parent", location.origin);
+  return target.href;
 }
 
 function renderSurfaceTabs(activeId) {
@@ -1022,20 +1031,15 @@ async function verifySurfaceTargets() {
   const controller = new AbortController();
   app.surfaceAbort = controller;
   const urlSurfaces = FLOYD_SURFACES.filter((surface) => surface.kind === "url");
-  if (remoteMode) {
-    for (const surface of urlSurfaces) app.surfaceAvailability.set(surface.id, { verified: false, reason: "Remote continuation cannot verify or open workstation loopback applications." });
-    if (app.surfaceAbort === controller) app.surfaceAbort = null;
-    if (el("surfaceDialog").open) renderSurfaceHub();
-    return;
-  }
   try {
     const discovery = await client.request("GET", "/api/surfaces", undefined, controller.signal);
     if (controller.signal.aborted || app.surfaceAbort !== controller) return;
     const results = Array.isArray(discovery?.surfaces) ? discovery.surfaces : [];
     for (const surface of urlSurfaces) {
-      const result = results.find((entry) => entry?.id === surface.id && entry?.target === surface.target);
+      const result = results.find((entry) => entry?.id === surface.id
+        && (remoteMode || entry?.target === surface.target));
       app.surfaceAvailability.set(surface.id, result
-        ? { verified: result.verified === true, reason: String(result.reason || "Core returned no verification reason.") }
+        ? { verified: result.verified === true, target: String(result.target || ""), reason: String(result.reason || "Core returned no verification reason.") }
         : { verified: false, reason: "Core did not return the fixed admitted target identity." });
     }
   } catch (error) {
@@ -1072,7 +1076,7 @@ function renderSurfaceHub() {
     </article>`;
   }).join("");
   el("surfaceBoundary").textContent = remoteMode
-    ? "Remote boundary: Core surface probing and application launch are disabled because workstation loopback addresses do not refer to the remote device. Floyd continuity does not federate third-party applications."
+    ? "Remote boundary: every application request is device-session authenticated, provenance-gated, and relayed by Floyd Core. This developer grant includes host filesystem and terminal authority; revoke the device session to cut it off."
     : "Local boundary: donor ports are never targeted. Open stays disabled until health proves the admitted source root and commit; Floyd Core remains the continuity authority.";
 }
 
