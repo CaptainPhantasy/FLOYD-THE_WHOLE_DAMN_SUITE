@@ -29,7 +29,22 @@ test("remote cockpit is continuation-only and disables local authority controls"
   assert.match(html, /Remote continuation cannot create a new run/);
   assert.match(html, /Run decisions require the local authority surface/);
   assert.match(html, /Private remote continuation/);
-  assert.match(html, /\["newTask", "modelSettings", "acceptRun", "rejectRun", "escalateRun"\]/);
+  assert.match(html, /\["newTask", "modelSettings", "shareHandoff", "acceptRun", "rejectRun", "escalateRun"\]/);
+  assert.match(html, /client\.pairExperienceHandoff\(handoffToken\)/);
+  assert.match(html, /history\.replaceState/);
+  assert.match(html, /sessionStorage\.removeItem\("floyd_gateway_token"\)/);
+});
+
+test("cockpit renders a local QR handoff without emoji or external image services", () => {
+  assert.match(html, /id="shareHandoff"/);
+  assert.match(html, /id="handoffQr"/);
+  assert.match(html, /handoff\.qr_svg/);
+  assert.match(html, /client\.issueExperienceHandoff/);
+  assert.match(html, /new Blob\(\[handoff\.qr_svg\]/);
+  assert.match(html, /client\.revokeExperienceHandoff/);
+  assert.doesNotMatch(html, /handoffQr"\)\.innerHTML/);
+  assert.doesNotMatch(html, /id="handoffLink"/);
+  assert.doesNotMatch(html, /api\.qrserver|chart\.googleapis|quickchart/);
 });
 
 test("cockpit exposes user-driven model routing without persisting provider keys", () => {

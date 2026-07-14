@@ -355,13 +355,9 @@ export interface ExperienceHandoffIssue {
   envelope_revision: number;
   expires_at: string;
   deep_link: string;
-  deep_link_payload: {
-    version: 1;
-    handoff_id: string;
-    token: string;
-    envelope_id: string;
-    envelope_revision: number;
-  };
+  /** Locally rendered QR image. Contains the deep link as geometry only. */
+  qr_svg: string;
+  qr_content_type: "image/svg+xml";
 }
 
 export interface ExperienceHandoffConsumption {
@@ -372,6 +368,16 @@ export interface ExperienceHandoffConsumption {
   consumed_at: string;
   envelope: ExperienceEnvelope;
   session: ExperienceDeviceSession;
+}
+
+export interface PairedExperienceHandoff {
+  handoff_id: string;
+  envelope_id: string;
+  envelope_revision: number;
+  consumed_at: string;
+  envelope: ExperienceEnvelope;
+  /** Session token is held only in Core's HttpOnly cookie. */
+  session: Omit<ExperienceDeviceSession, "token">;
 }
 
 // ---------- permission gating ----------

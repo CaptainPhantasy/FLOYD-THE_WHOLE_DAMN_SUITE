@@ -16,9 +16,12 @@ import { normalizeEngineEvent, type SessionMap } from "./live-channel.ts";
 import { classifyEngineEvent, SessionBuffer } from "./session-channel.ts";
 import { relayProviderRequest } from "./provider-gateway.ts";
 import { ConnectorAuthorityError, ConnectorAuthorityService } from "./connector-authority.ts";
+import { renderQrSvg } from "./qr.ts";
 import {
   ExperienceConflictError,
   getExperience,
+  mergeExperienceSnapshot,
+  negotiateExperience,
   registerSurface,
   synchronizePendingInteractions,
   updateExperience,
@@ -72,7 +75,18 @@ function closeRemoteStreams(sessionIds: readonly string[]): void {
 
 function sanitizeRemoteEnvelope(envelope: ExperienceEnvelope): Record<string, unknown> {
   const { credential_ref: _credentialRef, ...modelRoute } = envelope.model_route;
-  return { ...envelope, model_route: modelRoute };
+  return { ...envelope, model_route: { ...modelRoute, credential_ref: null } };
+}
+
+function sessionSnapshotEnvelope(principal: RemotePrincipal | null, envelopeId: string): ExperienceEnvelope | null {
+  const value = principal?.snapshot?.envelope;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const envelope = value as ExperienceEnvelope;
+  if (envelope.id !== envelopeId || !principal!.resources.envelope_ids.includes(envelopeId)) {
+    throw new ExperienceSecurityError("handoff_invalid", "device session snapshot identity is invalid", 500);
+  }
+  requireRemoteEnvelopeContext(principal, envelope);
+  return envelope;
 }
 
 function requireRemoteEnvelopeContext(principal: RemotePrincipal | null, envelope: ExperienceEnvelope): void {
@@ -103,6 +117,9 @@ function writeExperienceEvent(res: ServerResponse, envelope: ExperienceEnvelope,
 function broadcastExperience(envelope: ExperienceEnvelope): void {
   for (const client of experienceClients) {
     if (client.envelope_id !== envelope.id) continue;
+    // Paired handoffs own a session-local continuation snapshot. A global
+    // workstation context change must not evict or overwrite that view.
+    if (client.principal?.snapshot) continue;
     try {
       requireRemoteEnvelopeContext(client.principal, envelope);
     } catch {
@@ -111,6 +128,13 @@ function broadcastExperience(envelope: ExperienceEnvelope): void {
       continue;
     }
     if (!writeExperienceEvent(client.res, envelope, Boolean(client.principal))) experienceClients.delete(client);
+  }
+}
+
+function broadcastSessionExperience(sessionId: string, envelope: ExperienceEnvelope): void {
+  for (const client of experienceClients) {
+    if (client.principal?.sessionId !== sessionId || client.envelope_id !== envelope.id) continue;
+    if (!writeExperienceEvent(client.res, envelope, true)) experienceClients.delete(client);
   }
 }
 
@@ -357,6 +381,33 @@ function requestAbortSignal(req: IncomingMessage, res: ServerResponse): AbortSig
   return controller.signal;
 }
 
+const DEVICE_SESSION_COOKIE = "__Host-floyd_session";
+
+function cookieValue(req: IncomingMessage, name: string): string {
+  for (const part of (req.headers.cookie ?? "").split(";")) {
+    const [key, ...value] = part.trim().split("=");
+    if (key === name) {
+      try {
+        return decodeURIComponent(value.join("="));
+      } catch {
+        // A malformed percent escape is attacker-controlled input. Treat it as
+        // a missing credential so the normal authentication path returns 401.
+        return "";
+      }
+    }
+  }
+  return "";
+}
+
+function setDeviceSessionCookie(res: ServerResponse, token: string, expiresAt: string): void {
+  const maxAge = Math.max(0, Math.floor((Date.parse(expiresAt) - Date.now()) / 1000));
+  res.setHeader("set-cookie", `${DEVICE_SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; Max-Age=${maxAge}; Secure; HttpOnly; SameSite=Strict`);
+}
+
+function clearDeviceSessionCookie(res: ServerResponse): void {
+  res.setHeader("set-cookie", `${DEVICE_SESSION_COOKIE}=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Strict`);
+}
+
 function remoteRouteScope(method: string | undefined, path: string): ExperienceDeviceSessionScope | null | undefined {
   if (method === "GET" && path === "/api/health") return "health:read";
   if (method === "GET" && path === "/api/state") return "state:read";
@@ -386,6 +437,52 @@ function requireRemoteScope(principal: RemotePrincipal | null, scope: Experience
   if (principal && !principal.scopes.includes(scope)) {
     throw new ExperienceSecurityError("scope_denied", `device session lacks ${scope}`, 403);
   }
+}
+
+function handoffResources(
+  db: Db,
+  envelopeId: string,
+  envelopeRevision: number,
+  snapshot: Record<string, unknown> | null,
+): ExperienceDeviceSessionResources {
+  const envelope = snapshot?.envelope as ExperienceEnvelope | undefined ?? getExperience(db, envelopeId);
+  if (envelope.id !== envelopeId || Number(envelope.revision) !== envelopeRevision) {
+    throw new ExperienceSecurityError("handoff_invalid", "handoff snapshot identity is invalid", 500);
+  }
+  if (snapshot) {
+    const artifactIds = Array.isArray(snapshot.artifact_ids) ? snapshot.artifact_ids.map(String) : [];
+    return {
+      envelope_ids: [envelope.id],
+      project_ids: envelope.active.project_id ? [envelope.active.project_id] : [],
+      session_ids: envelope.active.session_id ? [envelope.active.session_id] : [],
+      run_ids: envelope.active.run_id ? [envelope.active.run_id] : [],
+      artifact_ids: artifactIds,
+    };
+  }
+  if (Number(envelope.revision) !== envelopeRevision) {
+    throw new ExperienceSecurityError(
+      "handoff_stale",
+      `handoff authorized ${envelopeId} revision ${envelopeRevision}, which is no longer current`,
+      409,
+    );
+  }
+  const artifactIds = envelope.active.run_id
+    ? (db.prepare(`SELECT artifact_id FROM run_artifacts WHERE run_id = ?`).all(envelope.active.run_id) as Array<{ artifact_id: string }>).map((row) => row.artifact_id)
+    : [];
+  return {
+    envelope_ids: [envelope.id],
+    project_ids: envelope.active.project_id ? [envelope.active.project_id] : [],
+    session_ids: envelope.active.session_id ? [envelope.active.session_id] : [],
+    run_ids: envelope.active.run_id ? [envelope.active.run_id] : [],
+    artifact_ids: artifactIds,
+  };
+}
+
+function consumedHandoffEnvelope(db: Db, consumed: ReturnType<ExperienceSecurityService["consumeHandoffForDevice"]>): Record<string, unknown> {
+  const snapshotEnvelope = consumed.handoff.snapshot?.envelope;
+  return snapshotEnvelope && typeof snapshotEnvelope === "object" && !Array.isArray(snapshotEnvelope)
+    ? snapshotEnvelope as Record<string, unknown>
+    : sanitizeRemoteEnvelope(getExperience(db, consumed.handoff.envelopeId));
 }
 
 function validateRemoteExperiencePatch(
@@ -484,19 +581,26 @@ function createGateway(
     const gatewayAuth = Array.isArray(req.headers["x-floyd-token"])
       ? req.headers["x-floyd-token"][0]
       : req.headers["x-floyd-token"];
+    const bearerAuth = req.headers.authorization?.replace(/^Bearer\s+/i, "") ?? "";
     const auth = isProviderGateway
       ? gatewayAuth ?? ""
-      : req.headers.authorization?.replace(/^Bearer\s+/i, "") ?? "";
+      : bearerAuth || (boundary === "remote" ? cookieValue(req, DEVICE_SESSION_COOKIE) : "");
     const isStatic = !path.startsWith("/api/") && !isProviderGateway;
     const selfAuthenticating = req.method === "POST"
-      && (path === "/api/devices/authenticate" || path === "/api/handoffs/consume");
+      && (path === "/api/devices/authenticate" || path === "/api/handoffs/consume" || path === "/api/handoffs/pair");
     if (selfAuthenticating) {
+      if (path === "/api/handoffs/pair" && boundary === "remote" && !req.headers.origin) {
+        return send(res, 403, { error: "browser pairing requires the configured remote Origin" });
+      }
       if (req.headers.origin) {
         try {
           const origin = new URL(req.headers.origin);
           const loopbackOrigin = ["localhost", "127.0.0.1", "::1"].includes(origin.hostname);
           const exactRemoteOrigin = boundary === "remote" && origin.origin === REMOTE_PUBLIC_ORIGIN;
-          if (!loopbackOrigin && !exactRemoteOrigin) return send(res, 403, { error: "self-authentication origin is not allowed" });
+          const allowed = path === "/api/handoffs/pair" && boundary === "remote"
+            ? exactRemoteOrigin
+            : loopbackOrigin || exactRemoteOrigin;
+          if (!allowed) return send(res, 403, { error: "self-authentication origin is not allowed" });
         } catch {
           return send(res, 403, { error: "self-authentication origin is invalid" });
         }
@@ -514,7 +618,7 @@ function createGateway(
         ? { windowStarted: now, count: 1 }
         : { ...prior, count: prior.count + 1 };
       selfAuthAttempts.set(key, attempt);
-      const limit = path === "/api/devices/authenticate" ? 8 : 30;
+      const limit = path === "/api/devices/authenticate" ? 8 : path === "/api/handoffs/pair" ? 10 : 30;
       if (attempt.count > limit) return send(res, 429, { error: "self-authentication rate limit exceeded" });
     }
     let remotePrincipal: RemotePrincipal | null = null;
@@ -620,7 +724,9 @@ function createGateway(
       if (path === "/api/state") {
         if (boundary === "remote") {
           const resources = remotePrincipal!.resources;
-          const stateEnvelope = resources.envelope_ids.length ? getExperience(db, resources.envelope_ids[0]) : null;
+          const stateEnvelope = resources.envelope_ids.length
+            ? sessionSnapshotEnvelope(remotePrincipal, resources.envelope_ids[0]!) ?? getExperience(db, resources.envelope_ids[0])
+            : null;
           if (stateEnvelope) requireRemoteEnvelopeContext(remotePrincipal, stateEnvelope);
           const inList = (values: string[]) => values.length ? values : ["__none__"];
           const projectMarks = inList(resources.project_ids).map(() => "?").join(",");
@@ -660,6 +766,35 @@ function createGateway(
           supported_envelope_versions: body.supported_envelope_versions,
           capabilities: body.capabilities,
         };
+        const snapshotEnvelope = sessionSnapshotEnvelope(remotePrincipal, envelopeId);
+        if (remotePrincipal && snapshotEnvelope) {
+          const negotiation = negotiateExperience(request);
+          if (!negotiation.accepted) return send(res, 426, { error: "sdk_upgrade_required", ...negotiation });
+          const existing = snapshotEnvelope.surfaces[request.surface_id];
+          const next = mergeExperienceSnapshot(db, snapshotEnvelope, {
+            expected_revision: snapshotEnvelope.revision,
+            surface: {
+              surface_id: request.surface_id,
+              sdk_version: request.sdk_version,
+              envelope_version: negotiation.envelope_version!,
+              capabilities: request.capabilities,
+              transcript_cursor: existing?.transcript_cursor ?? 0,
+              transcript_epoch: existing?.transcript_epoch ?? snapshotEnvelope.transcript_epoch,
+              last_event_id: existing?.last_event_id ?? null,
+            },
+            device_id: remotePrincipal.deviceId,
+          });
+          const nextSnapshot = { ...remotePrincipal.snapshot!, envelope: next };
+          if (!experienceSecurity.replaceDeviceSessionSnapshot(remotePrincipal.sessionId, snapshotEnvelope.revision, nextSnapshot)) {
+            return send(res, 409, { error: "revision_conflict", message: "device session snapshot changed concurrently" });
+          }
+          remotePrincipal.snapshot = nextSnapshot;
+          appendEvidence(db, "experience.negotiation.accepted", `device:${remotePrincipal.deviceId}`, {
+            envelope_id: envelopeId, sdk_version: request.sdk_version, envelope_version: negotiation.envelope_version,
+          }, { project_id: next.active.project_id, session_id: next.active.session_id, run_id: next.active.run_id });
+          broadcastSessionExperience(remotePrincipal.sessionId, next);
+          return send(res, 200, negotiation);
+        }
         let current = getExperience(db, envelopeId);
         requireRemoteEnvelopeContext(remotePrincipal, current);
         let result;
@@ -681,7 +816,7 @@ function createGateway(
       if (experienceMatch) {
         const envelopeId = decodeURIComponent(experienceMatch[1] ?? "");
         requireRemoteResource(remotePrincipal, "envelope_ids", envelopeId);
-        const authorizedEnvelope = getExperience(db, envelopeId);
+        const authorizedEnvelope = sessionSnapshotEnvelope(remotePrincipal, envelopeId) ?? getExperience(db, envelopeId);
         requireRemoteEnvelopeContext(remotePrincipal, authorizedEnvelope);
         if (experienceMatch[2] === "stream") {
           if (req.method !== "GET") return send(res, 405, { error: "experience stream is GET" });
@@ -730,7 +865,7 @@ function createGateway(
             return send(res, 400, { error: "experience patch must be a JSON object" });
           }
           const rawPatch = raw as Record<string, unknown>;
-          const currentAuthorizedEnvelope = remotePrincipal ? getExperience(db, envelopeId) : authorizedEnvelope;
+          const currentAuthorizedEnvelope = authorizedEnvelope;
           requireRemoteEnvelopeContext(remotePrincipal, currentAuthorizedEnvelope);
           validateRemoteExperiencePatch(rawPatch, remotePrincipal, currentAuthorizedEnvelope);
           if ("pending_questions" in rawPatch || "pending_permissions" in rawPatch) {
@@ -740,6 +875,37 @@ function createGateway(
             return send(res, 400, { error: "device attribution requires a device-scoped session credential" });
           }
           const patch = rawPatch as unknown as ExperienceEnvelopePatch;
+          if (remotePrincipal?.snapshot) {
+            try {
+              const envelope = mergeExperienceSnapshot(db, currentAuthorizedEnvelope, {
+                ...patch,
+                device_id: remotePrincipal.deviceId,
+              });
+              const nextSnapshot = { ...remotePrincipal.snapshot, envelope };
+              if (!experienceSecurity.replaceDeviceSessionSnapshot(remotePrincipal.sessionId, currentAuthorizedEnvelope.revision, nextSnapshot)) {
+                const latest = experienceSecurity.getDeviceSessionSnapshot(remotePrincipal.sessionId);
+                return send(res, 409, {
+                  error: "revision_conflict",
+                  expected_revision: patch.expected_revision,
+                  actual_revision: (latest?.envelope as ExperienceEnvelope | undefined)?.revision ?? null,
+                  envelope: latest?.envelope ?? null,
+                });
+              }
+              remotePrincipal.snapshot = nextSnapshot;
+              broadcastSessionExperience(remotePrincipal.sessionId, envelope);
+              return send(res, 200, sanitizeRemoteEnvelope(envelope));
+            } catch (error) {
+              if (error instanceof ExperienceConflictError) {
+                return send(res, 409, {
+                  error: "revision_conflict",
+                  expected_revision: patch.expected_revision,
+                  actual_revision: currentAuthorizedEnvelope.revision,
+                  envelope: sanitizeRemoteEnvelope(currentAuthorizedEnvelope),
+                });
+              }
+              throw error;
+            }
+          }
           try {
             const envelope = updateExperience(db, envelopeId, patch, {
               actor: remotePrincipal ? `device:${remotePrincipal.deviceId}` : "surface:http",
@@ -790,7 +956,12 @@ function createGateway(
         });
       }
       if (path === "/api/device-sessions/current" && req.method === "DELETE" && remotePrincipal) {
-        return experienceSecurity.revokeDeviceSession(remotePrincipal.sessionId, `device:${remotePrincipal.deviceId}`)
+        clearDeviceSessionCookie(res);
+        const revoked = experienceSecurity.revokeDeviceSession(remotePrincipal.sessionId, `device:${remotePrincipal.deviceId}`);
+        if (revoked && experienceSecurity.isTransientDevice(remotePrincipal.deviceId)) {
+          experienceSecurity.revokeDevice(remotePrincipal.deviceId, `device:${remotePrincipal.deviceId}`);
+        }
+        return revoked
           ? send(res, 200, { session_id: remotePrincipal.sessionId, revoked: true })
           : send(res, 404, { error: "no active device session" });
       }
@@ -813,21 +984,32 @@ function createGateway(
           createdByDeviceId: body.created_by_device_id,
           ttlMs: body.ttl_ms,
           scopes: body.scopes,
+          snapshot: {
+            envelope: sanitizeRemoteEnvelope(envelope),
+            artifact_ids: envelope.active.run_id
+              ? (db.prepare(`SELECT artifact_id FROM run_artifacts WHERE run_id = ?`).all(envelope.active.run_id) as Array<{ artifact_id: string }>).map((row) => row.artifact_id)
+              : [],
+          },
         });
+        const fragment = new URLSearchParams({ handoff: issued.token });
+        const deepLink = `${REMOTE_PUBLIC_ORIGIN.replace(/\/+$/, "")}/#${fragment.toString()}`;
+        let qrSvg: string;
+        try {
+          qrSvg = await renderQrSvg(deepLink);
+        } catch (error) {
+          experienceSecurity.revokeHandoff(issued.handoffId, "qr-render-failed");
+          throw error;
+        }
+        res.setHeader("cache-control", "no-store");
         return send(res, 201, {
           handoff_id: issued.handoffId,
           token: issued.token,
           envelope_id: issued.envelopeId,
           envelope_revision: issued.envelopeRevision,
           expires_at: issued.expiresAt,
-          deep_link: issued.deepLink,
-          deep_link_payload: {
-            version: issued.deepLinkPayload.version,
-            handoff_id: issued.deepLinkPayload.handoffId,
-            token: issued.deepLinkPayload.token,
-            envelope_id: issued.deepLinkPayload.envelopeId,
-            envelope_revision: issued.deepLinkPayload.envelopeRevision,
-          },
+          deep_link: deepLink,
+          qr_svg: qrSvg,
+          qr_content_type: "image/svg+xml",
         });
       }
       if (path === "/api/handoffs/consume" && req.method === "POST") {
@@ -836,26 +1018,11 @@ function createGateway(
           return send(res, 400, { error: "token, device_id, and device_secret required" });
         }
         await experienceSecurity.authenticateDevice(body.device_id, body.device_secret);
-        const consumed = experienceSecurity.consumeHandoffForDevice(body.token, body.device_id, (envelopeId, envelopeRevision) => {
-          const envelope = getExperience(db, envelopeId);
-          if (Number(envelope.revision) !== envelopeRevision) {
-            throw new ExperienceSecurityError(
-              "handoff_stale",
-              `handoff authorized ${envelopeId} revision ${envelopeRevision}, which is no longer current`,
-              409,
-            );
-          }
-          const artifactIds = envelope.active.run_id
-            ? (db.prepare(`SELECT artifact_id FROM run_artifacts WHERE run_id = ?`).all(envelope.active.run_id) as Array<{ artifact_id: string }>).map((row) => row.artifact_id)
-            : [];
-          return {
-            envelope_ids: [envelope.id],
-            project_ids: envelope.active.project_id ? [envelope.active.project_id] : [],
-            session_ids: envelope.active.session_id ? [envelope.active.session_id] : [],
-            run_ids: envelope.active.run_id ? [envelope.active.run_id] : [],
-            artifact_ids: artifactIds,
-          };
-        });
+        const consumed = experienceSecurity.consumeHandoffForDevice(
+          body.token, body.device_id,
+          (envelopeId, envelopeRevision, snapshot) => handoffResources(db, envelopeId, envelopeRevision, snapshot),
+        );
+        if (boundary === "remote") setDeviceSessionCookie(res, consumed.session.token, consumed.session.expiresAt);
         res.setHeader("cache-control", "no-store");
         return send(res, 200, {
           handoff_id: consumed.handoff.handoffId,
@@ -863,10 +1030,35 @@ function createGateway(
           envelope_revision: consumed.handoff.envelopeRevision,
           created_by_device_id: consumed.handoff.createdByDeviceId,
           consumed_at: consumed.handoff.consumedAt,
-          envelope: boundary === "remote"
-            ? sanitizeRemoteEnvelope(getExperience(db, consumed.handoff.envelopeId))
-            : getExperience(db, consumed.handoff.envelopeId),
+          envelope: consumedHandoffEnvelope(db, consumed),
           session: deviceSessionResponse(consumed.session),
+        });
+      }
+      if (path === "/api/handoffs/pair" && req.method === "POST") {
+        if (boundary !== "remote") return send(res, 403, { error: "pairing is available only on the private remote boundary" });
+        const body = requestObject(await readBody(req));
+        if (typeof body.token !== "string" || body.token.length === 0) return send(res, 400, { error: "token required" });
+        const consumed = await experienceSecurity.pairHandoff(
+          body.token,
+          { surface: "browser", user_agent: String(req.headers["user-agent"] ?? "").slice(0, 512) },
+          (envelopeId, envelopeRevision, snapshot) => handoffResources(db, envelopeId, envelopeRevision, snapshot),
+        );
+        setDeviceSessionCookie(res, consumed.session.token, consumed.session.expiresAt);
+        res.setHeader("cache-control", "no-store");
+        return send(res, 200, {
+          handoff_id: consumed.handoff.handoffId,
+          envelope_id: consumed.handoff.envelopeId,
+          envelope_revision: consumed.handoff.envelopeRevision,
+          consumed_at: consumed.handoff.consumedAt,
+          envelope: consumedHandoffEnvelope(db, consumed),
+          session: {
+            session_id: consumed.session.sessionId,
+            device_id: consumed.session.deviceId,
+            scopes: consumed.session.scopes,
+            resources: consumed.session.resources,
+            created_at: consumed.session.createdAt,
+            expires_at: consumed.session.expiresAt,
+          },
         });
       }
       if (path.match(/^\/api\/handoffs\/[^/]+$/) && req.method === "DELETE") {
@@ -1243,6 +1435,13 @@ function createGateway(
       return send(res, Number.isInteger(status) && status >= 400 && status <= 599 ? status : 500, body);
     }
   });
+
+  const transientCleanup = boundary === "remote" ? setInterval(() => {
+    try { experienceSecurity.cleanupExpiredTransientDevices("expiry-sweeper"); }
+    catch (error) { appendEvidence(db, "experience.transient_cleanup_failed", "floyd-core", { error: String(error) }); }
+  }, 60_000) : null;
+  transientCleanup?.unref();
+  if (transientCleanup) server.once("close", () => clearInterval(transientCleanup));
 
   server.headersTimeout = 10_000;
   server.requestTimeout = 30_000;

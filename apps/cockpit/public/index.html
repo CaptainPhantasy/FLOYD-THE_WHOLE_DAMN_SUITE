@@ -125,6 +125,14 @@
   .bottom-bar .right { margin-left: auto; }
   .toast { position: fixed; right: 18px; bottom: 36px; max-width: 460px; background: var(--surface-3); border: 1px solid var(--danger); color: var(--text); border-radius: 7px; padding: 10px 12px; box-shadow: 0 12px 28px rgba(0,0,0,.35); display: none; z-index: 10; font: 11px var(--mono); }
   .toast.show { display: block; }
+  .handoff-dialog { width: min(520px, calc(100vw - 32px)); border: 1px solid var(--line-strong); border-radius: 10px; padding: 0; background: var(--surface); color: var(--text); box-shadow: 0 24px 80px rgba(0,0,0,.6); }
+  .handoff-dialog::backdrop { background: rgba(0,0,0,.72); }
+  .handoff-head { display: flex; align-items: center; justify-content: space-between; padding: 13px 15px; border-bottom: 1px solid var(--line); }
+  .handoff-head strong { font: 600 11px var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+  .handoff-body { padding: 18px; }
+  .handoff-qr { width: min(320px, 100%); aspect-ratio: 1; margin: 0 auto 14px; padding: 10px; background: #fff; border-radius: 6px; }
+  .handoff-qr img { width: 100%; height: 100%; display: block; }
+  .handoff-note { margin: 10px 0 0; color: var(--faint); font-size: 11px; }
   @media (max-width: 1080px) { .workspace { grid-template-columns: 46px 240px minmax(400px,1fr); } .inspector { display: none; } }
   @media (max-width: 760px) { .topbar { grid-template-columns: 1fr auto; } .command-title { display: none; } .workspace { grid-template-columns: 42px minmax(0,1fr); } .sidebar { display: none; } .messages { padding: 16px; } .composer { margin: 0 10px 10px; } }
 </style>
@@ -152,6 +160,7 @@
   <main class="conversation">
     <div class="conversation-head">
       <div class="conversation-title"><strong id="runTitle">New coding task</strong><span id="runIdentity">Select a project and describe the outcome</span></div>
+      <button class="action-button" id="shareHandoff">Handoff</button>
       <button class="action-button primary" id="acceptRun" disabled>Accept</button>
       <button class="action-button danger" id="rejectRun" disabled>Reject</button>
       <button class="action-button" id="escalateRun" disabled>Escalate</button>
@@ -175,6 +184,14 @@
 </div>
 <footer class="bottom-bar"><span id="boundaryLabel">Loopback-only Core</span><span id="routeLabel">Route: awaiting health</span><span class="right" id="clock"></span></footer>
 <div class="toast" id="toast" role="alert"></div>
+<dialog class="handoff-dialog" id="handoffDialog">
+  <div class="handoff-head"><strong>Private continuation</strong><button class="quiet-button" id="closeHandoff" type="button">Close</button></div>
+  <div class="handoff-body">
+    <div class="handoff-qr"><img id="handoffQr" alt="Private handoff QR code"></div>
+    <button class="action-button" id="copyHandoff" type="button">Copy private link</button>
+    <p class="handoff-note">Keep this window open until the other device pairs. Closing it revokes the link. The receiving page removes the secret from browser history before pairing.</p>
+  </div>
+</dialog>
 
 <script type="module">
 import { FloydBrowserClient, FloydApiError } from "/floyd-sdk.js";
@@ -183,10 +200,12 @@ const query = new URLSearchParams(location.search);
 const remoteMode = !["localhost", "127.0.0.1", "::1", ""].includes(location.hostname);
 const bootstrap = new URLSearchParams(location.hash.replace(/^#/, ""));
 const bootstrapToken = bootstrap.get("token");
-if (bootstrapToken) {
+const handoffToken = bootstrap.get("handoff");
+if (bootstrapToken && !remoteMode) {
   sessionStorage.setItem("floyd_gateway_token", bootstrapToken);
-  history.replaceState({}, "", `${location.pathname}${location.search}`);
 }
+if (remoteMode) sessionStorage.removeItem("floyd_gateway_token");
+if (bootstrapToken || handoffToken) history.replaceState({}, "", `${location.pathname}${location.search}`);
 const token = () => sessionStorage.getItem("floyd_gateway_token") || "";
 const client = new FloydBrowserClient({ token });
 const actor = "douglas-cockpit";
@@ -214,6 +233,9 @@ const app = {
   snapshotParts: new Map(),
   runSelectionGeneration: 0,
   activeContextPublish: Promise.resolve(),
+  activeHandoffId: null,
+  activeHandoffLink: null,
+  handoffObjectUrl: null,
 };
 
 const el = (id) => document.getElementById(id);
@@ -830,6 +852,50 @@ el("inspectorBody").addEventListener("click", async (event) => {
   } catch (error) { notify(error); }
 });
 el("newTask").addEventListener("click", startNewTask);
+async function clearActiveHandoff() {
+  const id = app.activeHandoffId;
+  if (id) {
+    try { await client.revokeExperienceHandoff(id); }
+    catch (error) { if (!(error instanceof FloydApiError) || error.status !== 404) throw error; }
+  }
+  // Clear the only retry handle only after Core confirms revocation (or says
+  // the grant no longer exists). A network failure leaves the dialog usable.
+  app.activeHandoffId = null;
+  app.activeHandoffLink = null;
+  if (app.handoffObjectUrl) URL.revokeObjectURL(app.handoffObjectUrl);
+  app.handoffObjectUrl = null;
+  el("handoffQr").removeAttribute("src");
+}
+el("shareHandoff").addEventListener("click", async () => {
+  if (remoteMode) return;
+  try {
+    await clearActiveHandoff();
+    if (!app.envelope) await initializeExperience();
+    const handoff = await client.issueExperienceHandoff({
+      envelope_id: envelopeId,
+      envelope_revision: app.envelope.revision,
+      ttl_ms: 120_000,
+    });
+    app.activeHandoffId = handoff.handoff_id;
+    app.activeHandoffLink = handoff.deep_link;
+    app.handoffObjectUrl = URL.createObjectURL(new Blob([handoff.qr_svg], { type: "image/svg+xml" }));
+    el("handoffQr").src = app.handoffObjectUrl;
+    el("handoffDialog").showModal();
+  } catch (error) { notify(error); }
+});
+el("copyHandoff").addEventListener("click", async () => {
+  if (!app.activeHandoffLink) return;
+  try { await navigator.clipboard.writeText(app.activeHandoffLink); }
+  catch (error) { notify(error); }
+});
+async function closeHandoff() {
+  try {
+    await clearActiveHandoff();
+    el("handoffDialog").close();
+  } catch (error) { notify(error); }
+}
+el("closeHandoff").addEventListener("click", closeHandoff);
+el("handoffDialog").addEventListener("cancel", (event) => { event.preventDefault(); void closeHandoff(); });
 el("modelSettings").addEventListener("click", () => remoteMode ? notify(new Error("Provider settings require the local authority surface.")) : renderModelSettings());
 el("modeButton").addEventListener("click", () => {
   if (remoteMode) return;
@@ -852,8 +918,22 @@ setInterval(refreshHealth, 5000);
 app.refreshTimer = setInterval(() => refreshState(), 3500);
 if (remoteMode) {
   el("boundaryLabel").textContent = "Private remote continuation";
-  for (const id of ["newTask", "modelSettings", "acceptRun", "rejectRun", "escalateRun"]) el(id).disabled = true;
+  for (const id of ["newTask", "modelSettings", "shareHandoff", "acceptRun", "rejectRun", "escalateRun"]) el(id).disabled = true;
   el("modeButton").disabled = true;
+}
+if (remoteMode && handoffToken) {
+  try {
+    try { await client.pairExperienceHandoff(handoffToken); }
+    catch (error) {
+      // A dropped response may arrive after Core committed the pairing. The
+      // endpoint is idempotent for this handoff, so one bounded retry recovers
+      // the exact same session instead of creating another device.
+      if (error instanceof FloydApiError && error.status < 500) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      await client.pairExperienceHandoff(handoffToken);
+    }
+  }
+  catch (error) { notify(error); }
 }
 await refreshHealth();
 await refreshState();

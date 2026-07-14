@@ -456,6 +456,22 @@ function mergePatch(db: Db, current: ExperienceEnvelope, patch: ExperienceEnvelo
   };
 }
 
+/**
+ * Validate and merge an experience patch without writing the global envelope.
+ * Handoff sessions use this to maintain their resource-bound continuation
+ * snapshot after the workstation's primary envelope moves elsewhere.
+ */
+export function mergeExperienceSnapshot(
+  db: Db,
+  current: ExperienceEnvelope,
+  patch: ExperienceEnvelopeMutation,
+): ExperienceEnvelope {
+  if (patch.expected_revision !== current.revision) {
+    throw new ExperienceConflictError(current.id, patch.expected_revision, current.revision);
+  }
+  return mergePatch(db, current, patch);
+}
+
 export function updateExperienceEnvelope(
   db: Db,
   id: string,

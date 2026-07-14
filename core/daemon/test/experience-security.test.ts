@@ -174,6 +174,45 @@ test("handoff consumption and resource-bound session issuance are atomic", async
   ).deviceId, device.deviceId);
 });
 
+test("first-device pairing is idempotently recoverable and stores no usable browser device secret", async () => {
+  const { db, service, advance } = fixture();
+  const snapshot = { envelope: { id: "primary", revision: 9, active: { project_id: "prj", session_id: "ses", run_id: "run" } }, artifact_ids: ["art"] };
+  const issued = service.issueHandoff({ envelopeId: "primary", envelopeRevision: 9, snapshot });
+  const resources = { envelope_ids: ["primary"], project_ids: ["prj"], session_ids: ["ses"], run_ids: ["run"], artifact_ids: ["art"] };
+  const attempts = await Promise.allSettled([
+    service.pairHandoff(issued.token, { surface: "browser" }, (_id, _revision, stored) => {
+      assert.deepEqual(stored, snapshot);
+      return resources;
+    }),
+    service.pairHandoff(issued.token, { surface: "browser" }, () => resources),
+  ]);
+  assert.equal(attempts.filter((attempt) => attempt.status === "fulfilled").length, 2);
+  const pairedResults = attempts.map((attempt) => {
+    assert.equal(attempt.status, "fulfilled");
+    return (attempt as PromiseFulfilledResult<Awaited<ReturnType<typeof service.pairHandoff>>>).value;
+  });
+  const paired = pairedResults[0]!;
+  assert.equal(pairedResults[1]!.session.sessionId, paired.session.sessionId);
+  assert.equal(pairedResults[1]!.session.deviceId, paired.session.deviceId);
+  assert.equal(pairedResults[1]!.session.token, paired.session.token);
+  assert.equal(paired.handoff.snapshot?.envelope !== undefined, true);
+  assert.equal(service.authenticateDeviceSession(paired.session.token, "state:read").deviceId, paired.session.deviceId);
+  const device = db.prepare(`SELECT transient, secret_verifier, metadata_ciphertext FROM experience_devices`).get() as Record<string, unknown>;
+  assert.equal(device.transient, 1);
+  assert.equal(JSON.stringify(device).includes(paired.session.token), false);
+  assert.equal((db.prepare(`SELECT COUNT(*) AS count FROM experience_devices`).get() as { count: number }).count, 1);
+  assert.equal((db.prepare(`SELECT COUNT(*) AS count FROM experience_device_sessions`).get() as { count: number }).count, 1);
+  assert.equal(service.revokeHandoff(issued.handoffId), true);
+  await assert.rejects(service.pairHandoff(issued.token, { surface: "browser" }, () => resources), (error: unknown) => {
+    assert.equal((error as ExperienceSecurityError).code, "handoff_revoked");
+    return true;
+  });
+  assert.equal(service.authenticateDeviceSession(paired.session.token, "state:read").sessionId, paired.session.sessionId);
+  advance(15 * 60_000);
+  assert.equal(service.cleanupExpiredTransientDevices(), 1);
+  assert.equal((db.prepare(`SELECT revoked_at IS NOT NULL AS revoked FROM experience_devices`).get() as { revoked: number }).revoked, 1);
+});
+
 test("device grants cap issued scopes and revocation invalidates sessions and outstanding handoffs", async () => {
   const { db, service } = fixture();
   const device = await service.enrollDevice({ name: "Read-only" }, "dev_read", ["health:read", "experience:read"]);

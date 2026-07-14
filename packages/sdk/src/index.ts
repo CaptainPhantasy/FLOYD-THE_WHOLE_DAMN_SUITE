@@ -11,6 +11,7 @@ import {
   type ExperienceHandoffIssue,
   type ExperienceNegotiationRequest,
   type ExperienceNegotiationResult,
+  type PairedExperienceHandoff,
   type Job,
   type Lease,
   type Project,
@@ -293,6 +294,10 @@ export class FloydClient {
       device_id: deviceId,
       device_secret: deviceSecret,
     }, signal);
+  }
+
+  pairExperienceHandoff(token: string, signal?: AbortSignal): Promise<PairedExperienceHandoff> {
+    return this.request("POST", "/api/handoffs/pair", { token }, signal);
   }
 
   revokeExperienceHandoff(handoffId: string, signal?: AbortSignal): Promise<{ handoff_id: string; revoked: true }> {

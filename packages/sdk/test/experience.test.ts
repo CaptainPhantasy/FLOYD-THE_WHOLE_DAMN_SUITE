@@ -175,6 +175,7 @@ test("typed and browser clients expose the same device and handoff lifecycle", a
     await client.authenticateExperienceDevice("device/one", "secret-value");
     await client.issueExperienceHandoff({ envelope_id: "primary", envelope_revision: 8, ttl_ms: 30_000 });
     await client.consumeExperienceHandoff("hnd_token", "device/one", "device-secret");
+    await client.pairExperienceHandoff("hnd_pair_token");
     await client.revokeCurrentDeviceSession();
     await client.revokeExperienceHandoff("handoff/one");
     await client.revokeExperienceDevice("device/one");
@@ -185,6 +186,7 @@ test("typed and browser clients expose the same device and handoff lifecycle", a
       ["POST", "/api/devices/authenticate"],
       ["POST", "/api/handoffs"],
       ["POST", "/api/handoffs/consume"],
+      ["POST", "/api/handoffs/pair"],
       ["DELETE", "/api/device-sessions/current"],
       ["DELETE", "/api/handoffs/handoff%2Fone"],
       ["DELETE", "/api/devices/device%2Fone"],
@@ -199,6 +201,7 @@ test("typed and browser clients expose the same device and handoff lifecycle", a
       device_id: "device/one",
       device_secret: "device-secret",
     });
+    assert.deepEqual(JSON.parse(await seen[5]!.clone().text()), { token: "hnd_pair_token" });
   }
 
   for (const Client of [FloydClient, FloydBrowserClient] as const) {

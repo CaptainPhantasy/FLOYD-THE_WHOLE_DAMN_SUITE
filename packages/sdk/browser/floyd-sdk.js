@@ -145,6 +145,10 @@ export class FloydBrowserClient {
     }, signal);
   }
 
+  pairExperienceHandoff(token, signal) {
+    return this.request("POST", "/api/handoffs/pair", { token }, signal);
+  }
+
   revokeExperienceHandoff(handoffId, signal) {
     return this.request("DELETE", `/api/handoffs/${encodeURIComponent(handoffId)}`, undefined, signal);
   }

@@ -4,6 +4,7 @@ import {
   createCipheriv,
   createDecipheriv,
   createHash,
+  createHmac,
   randomBytes,
   scrypt as scryptCallback,
   timingSafeEqual,
@@ -19,6 +20,7 @@ const MASTER_KEY_BYTES = 32;
 const SECRET_BYTES = 32;
 const MAX_SECRET_CHARS = 256;
 const MAX_METADATA_BYTES = 16 * 1024;
+const MAX_HANDOFF_SNAPSHOT_BYTES = 1024 * 1024;
 const MAX_ID_CHARS = 128;
 const MIN_HANDOFF_TTL_MS = 5_000;
 const MAX_HANDOFF_TTL_MS = 15 * 60_000;
@@ -59,6 +61,7 @@ CREATE TABLE IF NOT EXISTS experience_devices (
   created_at TEXT NOT NULL,
   last_authenticated_at TEXT,
   allowed_scopes_json TEXT NOT NULL DEFAULT '[]',
+  transient INTEGER NOT NULL DEFAULT 0,
   revoked_at TEXT
 );
 
@@ -71,6 +74,9 @@ CREATE TABLE IF NOT EXISTS experience_handoffs (
   created_at TEXT NOT NULL,
   expires_at_ms INTEGER NOT NULL,
   scopes_json TEXT NOT NULL DEFAULT '[]',
+  snapshot_json TEXT,
+  paired_device_id TEXT,
+  paired_session_id TEXT,
   consumed_at TEXT,
   revoked_at TEXT
 );
@@ -81,6 +87,7 @@ CREATE TABLE IF NOT EXISTS experience_device_sessions (
   token_hash BLOB NOT NULL,
   scopes_json TEXT NOT NULL,
   resources_json TEXT NOT NULL DEFAULT '{"envelope_ids":[],"project_ids":[],"session_ids":[],"run_ids":[],"artifact_ids":[]}',
+  snapshot_json TEXT,
   created_at TEXT NOT NULL,
   expires_at_ms INTEGER NOT NULL,
   last_used_at TEXT,
@@ -143,6 +150,7 @@ export type AuthenticatedDeviceSession = {
   deviceId: string;
   scopes: ExperienceDeviceSessionScope[];
   resources: ExperienceDeviceSessionResources;
+  snapshot: Record<string, unknown> | null;
   expiresAt: string;
 };
 
@@ -168,6 +176,7 @@ export type HandoffConsumption = {
   envelopeRevision: number;
   createdByDeviceId: string | null;
   consumedAt: string;
+  snapshot: Record<string, unknown> | null;
 };
 
 export type HandoffSessionConsumption = {
@@ -226,6 +235,9 @@ type HandoffRow = {
   consumed_at: string | null;
   revoked_at: string | null;
   scopes_json: string;
+  snapshot_json: string | null;
+  paired_device_id: string | null;
+  paired_session_id: string | null;
 };
 
 type DeviceSessionRow = {
@@ -234,6 +246,8 @@ type DeviceSessionRow = {
   token_hash: Uint8Array;
   scopes_json: string;
   resources_json: string;
+  snapshot_json: string | null;
+  created_at: string;
   expires_at_ms: number;
   revoked_at: string | null;
   device_revoked_at: string | null;
@@ -246,7 +260,12 @@ export function ensureExperienceSecuritySchema(db: Db): void {
     db.prepare(`UPDATE experience_devices SET allowed_scopes_json = ?`).run(JSON.stringify(FLOYD_DEVICE_SESSION_SCOPES));
   }
   ensureColumn(db, "experience_handoffs", "scopes_json", "TEXT NOT NULL DEFAULT '[]'");
+  ensureColumn(db, "experience_handoffs", "snapshot_json", "TEXT");
+  ensureColumn(db, "experience_handoffs", "paired_device_id", "TEXT");
+  ensureColumn(db, "experience_handoffs", "paired_session_id", "TEXT");
+  ensureColumn(db, "experience_devices", "transient", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn(db, "experience_device_sessions", "resources_json", `TEXT NOT NULL DEFAULT '${JSON.stringify(EMPTY_RESOURCES)}'`);
+  ensureColumn(db, "experience_device_sessions", "snapshot_json", "TEXT");
 }
 
 /**
@@ -408,13 +427,82 @@ export class ExperienceSecurityService {
     if (this.#now() >= row!.expires_at_ms) throw new ExperienceSecurityError("device_session_expired", "device session has expired", 401);
     const scopes = parseStoredDeviceSessionScopes(row!.scopes_json);
     const resources = parseStoredDeviceSessionResources(row!.resources_json);
+    const snapshot = parseHandoffSnapshot(row!.snapshot_json);
     if (requiredScope && !scopes.includes(requiredScope)) {
       throw new ExperienceSecurityError("scope_denied", `device session lacks ${requiredScope}`, 403);
     }
     if (requiredResource && !resources[requiredResource.kind].includes(requiredResource.id)) {
       throw new ExperienceSecurityError("scope_denied", `device session is not authorized for ${requiredResource.kind}`, 403);
     }
-    return { sessionId: id, deviceId: row!.device_id, scopes, resources, expiresAt: new Date(row!.expires_at_ms).toISOString() };
+    return { sessionId: id, deviceId: row!.device_id, scopes, resources, snapshot, expiresAt: new Date(row!.expires_at_ms).toISOString() };
+  }
+
+  getDeviceSessionSnapshot(sessionIdInput: string): Record<string, unknown> | null {
+    const sessionId = validId(sessionIdInput, "sessionId");
+    const row = this.db.prepare(`SELECT snapshot_json FROM experience_device_sessions WHERE id = ?`).get(sessionId) as { snapshot_json: string | null } | undefined;
+    return row ? parseHandoffSnapshot(row.snapshot_json) : null;
+  }
+
+  replaceDeviceSessionSnapshot(
+    sessionIdInput: string,
+    expectedEnvelopeRevision: number,
+    snapshot: Record<string, unknown>,
+  ): boolean {
+    const sessionId = validId(sessionIdInput, "sessionId");
+    const serialized = validHandoffSnapshot(snapshot);
+    this.db.exec("BEGIN IMMEDIATE");
+    let committed = false;
+    try {
+      const row = this.db.prepare(
+        `SELECT s.snapshot_json, s.expires_at_ms, s.revoked_at, d.revoked_at AS device_revoked_at
+         FROM experience_device_sessions s JOIN experience_devices d ON d.id = s.device_id
+         WHERE s.id = ?`,
+      ).get(sessionId) as { snapshot_json: string | null; expires_at_ms: number; revoked_at: string | null; device_revoked_at: string | null } | undefined;
+      if (!row || row.revoked_at || row.device_revoked_at || this.#now() >= row.expires_at_ms) {
+        throw new ExperienceSecurityError("device_session_expired", "device session is no longer active", 401);
+      }
+      const current = parseHandoffSnapshot(row.snapshot_json);
+      const envelope = current?.envelope as { revision?: unknown } | undefined;
+      if (!envelope || envelope.revision !== expectedEnvelopeRevision) {
+        this.db.exec("COMMIT");
+        committed = true;
+        return false;
+      }
+      this.db.prepare(`UPDATE experience_device_sessions SET snapshot_json = ? WHERE id = ?`).run(serialized, sessionId);
+      this.db.exec("COMMIT");
+      committed = true;
+      return true;
+    } catch (error) {
+      if (!committed) this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  cleanupExpiredTransientDevices(actor = "core"): number {
+    const now = this.#now();
+    const revokedAt = new Date(now).toISOString();
+    this.db.exec("BEGIN IMMEDIATE");
+    let committed = false;
+    try {
+      const rows = this.db.prepare(
+        `SELECT d.id FROM experience_devices d
+         WHERE d.transient = 1 AND d.revoked_at IS NULL AND NOT EXISTS (
+           SELECT 1 FROM experience_device_sessions s
+           WHERE s.device_id = d.id AND s.revoked_at IS NULL AND s.expires_at_ms > ?
+         )`,
+      ).all(now) as Array<{ id: string }>;
+      for (const row of rows) {
+        this.db.prepare(`UPDATE experience_devices SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL`).run(revokedAt, row.id);
+        this.db.prepare(`UPDATE experience_device_sessions SET revoked_at = COALESCE(revoked_at, ?) WHERE device_id = ?`).run(revokedAt, row.id);
+        this.#emit("experience.device.revoked", actor, { device_id: row.id });
+      }
+      this.db.exec("COMMIT");
+      committed = true;
+      return rows.length;
+    } catch (error) {
+      if (!committed) this.db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   revokeDeviceSession(sessionIdInput: string, actor = "core"): boolean {
@@ -438,6 +526,12 @@ export class ExperienceSecurityService {
       this.db.exec("ROLLBACK");
       throw error;
     }
+  }
+
+  isTransientDevice(deviceIdInput: string): boolean {
+    const deviceId = validId(deviceIdInput, "deviceId");
+    const row = this.db.prepare(`SELECT transient FROM experience_devices WHERE id = ?`).get(deviceId) as { transient: number } | undefined;
+    return row?.transient === 1;
   }
 
   revokeDevice(deviceIdInput: string, actor = "core"): boolean {
@@ -478,12 +572,14 @@ export class ExperienceSecurityService {
     createdByDeviceId?: string;
     ttlMs?: number;
     scopes?: readonly ExperienceDeviceSessionScope[];
+    snapshot?: Record<string, unknown>;
   }): HandoffIssue {
     const envelopeId = validId(input.envelopeId, "envelopeId");
     const revision = validRevision(input.envelopeRevision);
     const createdBy = input.createdByDeviceId === undefined ? null : validId(input.createdByDeviceId, "createdByDeviceId");
     const ttlMs = input.ttlMs ?? DEFAULT_HANDOFF_TTL_MS;
     const scopes = validDeviceSessionScopes(input.scopes ?? DEFAULT_HANDOFF_DEVICE_SCOPES);
+    const snapshotJson = input.snapshot === undefined ? null : validHandoffSnapshot(input.snapshot);
     if (!Number.isSafeInteger(ttlMs) || ttlMs < MIN_HANDOFF_TTL_MS || ttlMs > MAX_HANDOFF_TTL_MS) {
       invalid(`ttlMs must be an integer between ${MIN_HANDOFF_TTL_MS} and ${MAX_HANDOFF_TTL_MS}`);
     }
@@ -514,10 +610,10 @@ export class ExperienceSecurityService {
       this.db
         .prepare(
           `INSERT INTO experience_handoffs
-           (id, token_hash, envelope_id, envelope_revision, created_by_device_id, created_at, expires_at_ms, scopes_json)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+           (id, token_hash, envelope_id, envelope_revision, created_by_device_id, created_at, expires_at_ms, scopes_json, snapshot_json)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
-        .run(handoffId, tokenHash, envelopeId, revision, createdBy, createdAt, expiresAtMs, JSON.stringify(scopes));
+        .run(handoffId, tokenHash, envelopeId, revision, createdBy, createdAt, expiresAtMs, JSON.stringify(scopes), snapshotJson);
       this.#emit("experience.handoff.issued", createdBy ?? "core", {
         handoff_id: handoffId,
         envelope_id: envelopeId,
@@ -578,6 +674,7 @@ export class ExperienceSecurityService {
         envelopeRevision: row!.envelope_revision,
         createdByDeviceId: row!.created_by_device_id,
         consumedAt,
+        snapshot: parseHandoffSnapshot(row!.snapshot_json),
       };
     } catch (error) {
       if (!committed) this.db.exec("ROLLBACK");
@@ -593,7 +690,7 @@ export class ExperienceSecurityService {
   consumeHandoffForDevice(
     tokenInput: string,
     actorDeviceIdInput: string,
-    resolveResources: (envelopeId: string, envelopeRevision: number) => ExperienceDeviceSessionResources,
+    resolveResources: (envelopeId: string, envelopeRevision: number, snapshot: Record<string, unknown> | null) => ExperienceDeviceSessionResources,
     ttlMs = DEFAULT_DEVICE_SESSION_TTL_MS,
   ): HandoffSessionConsumption {
     const { id, secret } = parseHandoffToken(tokenInput);
@@ -620,7 +717,8 @@ export class ExperienceSecurityService {
         parseStoredDeviceSessionScopes(device.allowed_scopes_json),
       );
       if (scopes.length === 0) throw new ExperienceSecurityError("scope_denied", "handoff and device have no shared approved scopes", 403);
-      const resources = validDeviceSessionResources(resolveResources(row!.envelope_id, row!.envelope_revision));
+      const snapshot = parseHandoffSnapshot(row!.snapshot_json);
+      const resources = validDeviceSessionResources(resolveResources(row!.envelope_id, row!.envelope_revision, snapshot));
 
       const sessionId = generateRouteId();
       const tokenSecret = randomBytes(SECRET_BYTES).toString("base64url");
@@ -630,9 +728,9 @@ export class ExperienceSecurityService {
       const expiresAtMs = now + ttlMs;
       this.db.prepare(
         `INSERT INTO experience_device_sessions
-         (id, device_id, token_hash, scopes_json, resources_json, created_at, expires_at_ms)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      ).run(sessionId, actorDeviceId, hashTokenSecret(tokenSecret), JSON.stringify(scopes), JSON.stringify(resources), createdAt, expiresAtMs);
+         (id, device_id, token_hash, scopes_json, resources_json, snapshot_json, created_at, expires_at_ms)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(sessionId, actorDeviceId, hashTokenSecret(tokenSecret), JSON.stringify(scopes), JSON.stringify(resources), row!.snapshot_json, createdAt, expiresAtMs);
 
       const consumedAt = new Date(this.#now()).toISOString();
       const update = this.db.prepare(
@@ -659,6 +757,7 @@ export class ExperienceSecurityService {
           envelopeRevision: row!.envelope_revision,
           createdByDeviceId: row!.created_by_device_id,
           consumedAt,
+          snapshot,
         },
         session: {
           sessionId,
@@ -676,6 +775,162 @@ export class ExperienceSecurityService {
     }
   }
 
+  /**
+   * First-device pairing for a scanned QR. Possession of the short-lived,
+   * consume-once handoff token enrolls a transient browser device and issues
+   * its resource-bound session in one SQLite transaction. The generated
+   * permanent device secret is intentionally never returned to JavaScript.
+   */
+  async pairHandoff(
+    tokenInput: string,
+    metadata: Record<string, unknown>,
+    resolveResources: (envelopeId: string, envelopeRevision: number, snapshot: Record<string, unknown> | null) => ExperienceDeviceSessionResources,
+    ttlMs = DEFAULT_DEVICE_SESSION_TTL_MS,
+  ): Promise<HandoffSessionConsumption> {
+    const { id, secret: handoffSecret } = parseHandoffToken(tokenInput);
+    if (!Number.isSafeInteger(ttlMs) || ttlMs < MIN_DEVICE_SESSION_TTL_MS || ttlMs > DEFAULT_DEVICE_SESSION_TTL_MS) {
+      invalid(`handoff device session ttlMs must be an integer between ${MIN_DEVICE_SESSION_TTL_MS} and ${DEFAULT_DEVICE_SESSION_TTL_MS}`);
+    }
+    const preflight = this.db.prepare(`SELECT * FROM experience_handoffs WHERE id = ?`).get(id) as unknown as HandoffRow | undefined;
+    verifyHandoffSecret(preflight, handoffSecret);
+    if (preflight!.revoked_at) throw new ExperienceSecurityError("handoff_revoked", "handoff has been revoked", 410);
+    if (this.#now() >= preflight!.expires_at_ms) throw new ExperienceSecurityError("handoff_expired", "handoff has expired", 410);
+    if (preflight!.consumed_at) return this.#recoverPairedHandoff(preflight!, handoffSecret);
+
+    const deviceId = `dev_pair_${randomBytes(10).toString("base64url")}`;
+    const metadataJson = validMetadata({ ...metadata, transient_pairing: true });
+    const discardedSecret = randomBytes(SECRET_BYTES).toString("base64url");
+    const salt = randomBytes(16);
+    const verifier = await deriveSecret(discardedSecret, salt);
+    const encrypted = encryptMetadata(this.#key, deviceId, metadataJson);
+    const now = this.#now();
+    const createdAt = new Date(now).toISOString();
+
+    this.db.exec("BEGIN IMMEDIATE");
+    let committed = false;
+    try {
+      const row = this.db.prepare(`SELECT * FROM experience_handoffs WHERE id = ?`).get(id) as unknown as HandoffRow | undefined;
+      verifyHandoffSecret(row, handoffSecret);
+      if (row!.revoked_at) throw new ExperienceSecurityError("handoff_revoked", "handoff has been revoked", 410);
+      if (this.#now() >= row!.expires_at_ms) throw new ExperienceSecurityError("handoff_expired", "handoff has expired", 410);
+      if (row!.consumed_at) {
+        this.db.exec("COMMIT");
+        committed = true;
+        return this.#recoverPairedHandoff(row!, handoffSecret);
+      }
+      const scopes = parseStoredDeviceSessionScopes(row!.scopes_json);
+      if (scopes.length === 0) throw new ExperienceSecurityError("scope_denied", "handoff has no approved scopes", 403);
+      const snapshot = parseHandoffSnapshot(row!.snapshot_json);
+      const resources = validDeviceSessionResources(resolveResources(row!.envelope_id, row!.envelope_revision, snapshot));
+      const sessionId = generateRouteId();
+      const sessionSecret = derivePairedSessionSecret(this.#key, id, sessionId, handoffSecret);
+      const sessionToken = `fds_${sessionId}.${sessionSecret}`;
+      const expiresAtMs = now + ttlMs;
+
+      this.db.prepare(
+        `UPDATE experience_devices SET revoked_at = ?
+         WHERE transient = 1 AND revoked_at IS NULL AND NOT EXISTS (
+           SELECT 1 FROM experience_device_sessions s
+           WHERE s.device_id = experience_devices.id AND s.revoked_at IS NULL AND s.expires_at_ms > ?
+         )`,
+      ).run(createdAt, now);
+
+      this.db.prepare(
+        `INSERT INTO experience_devices
+         (id, secret_salt, secret_verifier, metadata_iv, metadata_tag, metadata_ciphertext, created_at, allowed_scopes_json, transient)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+      ).run(deviceId, salt, verifier, encrypted.iv, encrypted.tag, encrypted.ciphertext, createdAt, JSON.stringify(scopes));
+      this.db.prepare(
+        `INSERT INTO experience_device_sessions
+         (id, device_id, token_hash, scopes_json, resources_json, snapshot_json, created_at, expires_at_ms)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(sessionId, deviceId, hashTokenSecret(sessionSecret), JSON.stringify(scopes), JSON.stringify(resources), row!.snapshot_json, createdAt, expiresAtMs);
+      const consumedAt = new Date(this.#now()).toISOString();
+      const update = this.db.prepare(
+        `UPDATE experience_handoffs SET consumed_at = ?, paired_device_id = ?, paired_session_id = ?
+         WHERE id = ? AND consumed_at IS NULL AND revoked_at IS NULL`,
+      ).run(consumedAt, deviceId, sessionId, id);
+      if (Number(update.changes) !== 1) throw new ExperienceSecurityError("handoff_consumed", "handoff has already been consumed", 409);
+      this.#emit("experience.device.enrolled", deviceId, { device_id: deviceId, key_id: this.keyId });
+      this.#emit("experience.device_session.issued", deviceId, {
+        session_id: sessionId, device_id: deviceId, scope_count: scopes.length, expires_at_ms: expiresAtMs,
+      });
+      this.#emit("experience.handoff.consumed", deviceId, {
+        handoff_id: id, envelope_id: row!.envelope_id, envelope_revision: row!.envelope_revision,
+      });
+      this.db.exec("COMMIT");
+      committed = true;
+      return {
+        handoff: {
+          handoffId: id,
+          envelopeId: row!.envelope_id,
+          envelopeRevision: row!.envelope_revision,
+          createdByDeviceId: row!.created_by_device_id,
+          consumedAt,
+          snapshot,
+        },
+        session: {
+          sessionId,
+          deviceId,
+          token: sessionToken,
+          scopes,
+          resources,
+          createdAt,
+          expiresAt: new Date(expiresAtMs).toISOString(),
+        },
+      };
+    } catch (error) {
+      if (!committed) this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  /**
+   * Recover the exact pairing result after a lost HTTP response. The one-time
+   * handoff never creates a second device or session: the same bearer derives
+   * the same session secret until the handoff itself expires.
+   */
+  #recoverPairedHandoff(row: HandoffRow, handoffSecret: string): HandoffSessionConsumption {
+    if (!row.paired_device_id || !row.paired_session_id || !row.consumed_at) {
+      throw new ExperienceSecurityError("handoff_consumed", "handoff has already been consumed", 409);
+    }
+    const session = this.db.prepare(
+      `SELECT s.*, d.revoked_at AS device_revoked_at
+       FROM experience_device_sessions s
+       JOIN experience_devices d ON d.id = s.device_id
+       WHERE s.id = ? AND s.device_id = ?`,
+    ).get(row.paired_session_id, row.paired_device_id) as unknown as DeviceSessionRow | undefined;
+    if (!session || session.device_revoked_at || session.revoked_at || this.#now() >= session.expires_at_ms) {
+      throw new ExperienceSecurityError("handoff_consumed", "paired handoff session is no longer recoverable", 409);
+    }
+    const sessionSecret = derivePairedSessionSecret(this.#key, row.id, session.id, handoffSecret);
+    const candidate = hashTokenSecret(sessionSecret);
+    const stored = Buffer.from(session.token_hash);
+    if (candidate.length !== stored.length || !timingSafeEqual(candidate, stored)) {
+      throw new ExperienceSecurityError("handoff_invalid", "paired handoff session integrity check failed", 500);
+    }
+    const snapshot = parseHandoffSnapshot(session.snapshot_json);
+    return {
+      handoff: {
+        handoffId: row.id,
+        envelopeId: row.envelope_id,
+        envelopeRevision: row.envelope_revision,
+        createdByDeviceId: row.created_by_device_id,
+        consumedAt: row.consumed_at,
+        snapshot,
+      },
+      session: {
+        sessionId: session.id,
+        deviceId: session.device_id,
+        token: `fds_${session.id}.${sessionSecret}`,
+        scopes: parseStoredDeviceSessionScopes(session.scopes_json),
+        resources: parseStoredDeviceSessionResources(session.resources_json),
+        createdAt: session.created_at,
+        expiresAt: new Date(session.expires_at_ms).toISOString(),
+      },
+    };
+  }
+
   /** Core-authority operation backing DELETE /api/handoffs/:id. */
   revokeHandoff(handoffIdInput: string, actor = "core"): boolean {
     const id = validId(handoffIdInput, "handoffId");
@@ -690,7 +945,9 @@ export class ExperienceSecurityService {
       }
       const revokedAt = new Date(this.#now()).toISOString();
       const result = this.db
-        .prepare(`UPDATE experience_handoffs SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL AND consumed_at IS NULL`)
+        // Revoking a consumed pairing closes its idempotent recovery window;
+        // the already-issued session remains valid until logout or expiry.
+        .prepare(`UPDATE experience_handoffs SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL`)
         .run(revokedAt, id);
       const revoked = Number(result.changes) === 1;
       if (revoked) this.#emit("experience.handoff.revoked", actor, { handoff_id: id, envelope_id: row.envelope_id });
@@ -830,6 +1087,17 @@ function hashTokenSecret(secret: string): Buffer {
   return createHash("sha256").update(secret, "utf8").digest();
 }
 
+function derivePairedSessionSecret(key: Buffer, handoffId: string, sessionId: string, handoffSecret: string): string {
+  return createHmac("sha256", key)
+    .update("floyd-paired-session-v1\0")
+    .update(handoffId)
+    .update("\0")
+    .update(sessionId)
+    .update("\0")
+    .update(handoffSecret)
+    .digest("base64url");
+}
+
 function verifyHandoffSecret(row: HandoffRow | undefined, secret: string): asserts row is HandoffRow {
   const candidate = hashTokenSecret(secret);
   const stored = row ? Buffer.from(row.token_hash) : Buffer.alloc(candidate.length);
@@ -891,6 +1159,24 @@ function parseStoredDeviceSessionResources(value: string): ExperienceDeviceSessi
   } catch (error) {
     if (error instanceof ExperienceSecurityError) throw error;
     throw new ExperienceSecurityError("device_session_invalid", "stored device session resources are invalid", 401);
+  }
+}
+
+function validHandoffSnapshot(snapshot: Record<string, unknown>): string {
+  if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) invalid("handoff snapshot is invalid");
+  const serialized = JSON.stringify(snapshot);
+  if (Buffer.byteLength(serialized) > MAX_HANDOFF_SNAPSHOT_BYTES) invalid("handoff snapshot exceeds 1 MiB");
+  return serialized;
+}
+
+function parseHandoffSnapshot(value: string | null): Record<string, unknown> | null {
+  if (value === null) return null;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("not an object");
+    return parsed as Record<string, unknown>;
+  } catch {
+    throw new ExperienceSecurityError("handoff_invalid", "stored handoff snapshot is invalid", 500);
   }
 }
 

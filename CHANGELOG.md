@@ -33,6 +33,18 @@
 - Device authentication now exchanges the permanent enrollment secret for a
   least-privilege access session; one-time handoff consumption atomically mints
   an envelope/session/run-bound session and returns its expiry and capabilities.
+- The Cockpit can issue a private HTTPS-fragment handoff with a locally rendered
+  SVG QR. The receiving remote surface scrubs the fragment before network work,
+  atomically consumes the handoff, and receives a short-lived Secure, HttpOnly,
+  SameSite=Strict session cookie without exposing a device secret to JavaScript.
+- QR output is constrained to an inert geometry allowlist and loaded only as an
+  image blob. The full bearer URL is hidden unless the user explicitly copies
+  it, and closing or replacing the QR revokes the outstanding handoff.
+- Handoffs retain an immutable sanitized experience/resource snapshot, so later
+  primary-envelope revisions do not corrupt the intended continuation context;
+  the paired session can update its own Core-persisted snapshot independently.
+  Pair retries recover the exact original session after a lost HTTP response.
+  Transient paired identities are revoked on logout and swept after expiry.
 - Typed and browser SDKs expose device-session logout while preserving exact
   401/403 responses and cancellation of remote SSE readers.
 - A zero-dependency connector authority stores API keys and OAuth tokens under
@@ -50,8 +62,11 @@
 - Device metadata uses AES-256-GCM under a 0600 Core key; device enrollment
   secrets use scrypt and handoff secrets are hashed, expiring, consume-once,
   revision-bound, and revocable.
-- Handoff consumption requires possession of both an enrolled device secret
-  and the one-time handoff token. Self-authentication is origin-checked and
+- Existing-device handoff consumption requires both an enrolled device secret
+  and the one-time token. First-browser pairing accepts the one-time token as
+  the enrollment capability, atomically consumes it, and returns credentials
+  only in an HttpOnly cookie. Pair recovery is idempotent until handoff expiry.
+  Browser pairing requires the normalized configured HTTPS Origin and is
   rate-limited; API query-token authentication has been removed.
 - Security mutations and their evidence events commit or roll back together.
 - Device access tokens are opaque and hash-at-rest, capped at 15 minutes for
@@ -73,6 +88,6 @@
 
 ### Still incomplete
 
-- Platform-secure client storage, second-device remote acceptance, QR rendering,
-  connector/OAuth authority, and five-surface restore conformance remain open
-  until their direct runtime gates pass.
+- Native platform-secure client storage, physical second-device QR acceptance,
+  real-provider OAuth acceptance, and five-surface restore conformance remain
+  open until their direct runtime gates pass.

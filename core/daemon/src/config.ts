@@ -10,9 +10,25 @@ export const RUNTIME_ROOT = process.env.FLOYD_RUNTIME_ROOT ?? "/Volumes/Storage/
 
 export const CORE_PORT = Number(process.env.FLOYD_CORE_PORT ?? 41414);
 export const REMOTE_CORE_PORT = Number(process.env.FLOYD_REMOTE_CORE_PORT ?? 41416);
-export const REMOTE_PUBLIC_ORIGIN = process.env.FLOYD_REMOTE_ORIGIN ?? "https://douglass-mac-mini.tail58d565.ts.net:8443";
+export const REMOTE_PUBLIC_ORIGIN = normalizeRemoteOrigin(
+  process.env.FLOYD_REMOTE_ORIGIN ?? "https://douglass-mac-mini.tail58d565.ts.net:8443",
+);
 export const ENGINE_PORT = Number(process.env.FLOYD_ENGINE_PORT ?? 41415);
 export const LOOPBACK = "127.0.0.1";
+
+function normalizeRemoteOrigin(value: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error("FLOYD_REMOTE_ORIGIN must be an absolute HTTPS origin");
+  }
+  if (parsed.protocol !== "https:" || parsed.username || parsed.password
+    || parsed.pathname !== "/" || parsed.search || parsed.hash) {
+    throw new Error("FLOYD_REMOTE_ORIGIN must be an HTTPS origin without credentials, path, query, or fragment");
+  }
+  return parsed.origin;
+}
 
 export const PATHS = {
   coreDir: join(RUNTIME_ROOT, "core"),

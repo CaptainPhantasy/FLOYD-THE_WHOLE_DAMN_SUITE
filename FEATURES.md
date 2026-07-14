@@ -8,8 +8,8 @@
 | Multi-provider completion relay | Shipped | Gateway tests and live loopback probe |
 | Portable experience envelope | In progress | Core/SDK/Cockpit and HTTP integration tests pass; five-surface runtime proof remains |
 | SDK capability/version negotiation | Shipped | Typed/browser SDK plus accepted and HTTP 426 integration tests |
-| Encrypted device identity | In progress | AES-GCM/scrypt/revocation and HTTP lifecycle tests pass; platform-secure client storage remains |
-| Deep-link and QR handoff | In progress | Expiring revision-bound deep link plus enrolled-device proof pass; QR renderer and rendered scan proof remain |
+| Encrypted device identity | In progress | AES-GCM/scrypt/revocation pass; paired browsers use a Secure HttpOnly session cookie, while native Keychain storage remains |
+| Deep-link and QR handoff | In progress | Private HTTPS fragment link, inert local SVG QR, independently mutable session snapshot, idempotently recoverable consume-once pairing, and cookie-auth tests pass; a physical second-device scan remains |
 | Private remote attach | In progress | Separate 41416 allowlisted listener and Tailscale HTTPS 8443 are live; scoped attach, out-of-bound denial, logout, and stream revocation pass, but a second physical tailnet-device proof remains |
 | Connector/OAuth authority | In progress | AES-GCM API-key/OAuth storage, PKCE, refresh/revoke, endpoint-bound relay references, SDK parity, and mock lifecycle tests pass; real-provider OAuth proof remains |
 | Unified single-surface experience | In progress | Cockpit envelope wiring underway; five-surface restore proof pending |
@@ -29,3 +29,27 @@ Connector authority operational boundaries:
   seconds. Exceptionally cold or silent models can be terminated by policy.
 - The 0600 encryption key protects a copied database, not a fully compromised
   runtime directory or user account. Real-provider OAuth acceptance is pending.
+
+Handoff operational boundaries:
+
+- QR rendering is local and never sends the bearer link to an image service,
+  but currently depends on a compatible system `qrencode` binary. A missing,
+  incompatible, timed-out, or oversized renderer response makes issuance fail
+  closed and revokes the just-created handoff.
+- The fragment contains a short-lived bearer secret until the receiving page
+  reads and immediately removes it from browser history. Camera rolls, screen
+  recording, shoulder surfing, extensions, or a compromised receiving browser
+  can still capture it before consumption.
+- A lost pairing response can be retried without minting a second identity: the
+  same valid handoff deterministically recovers the same session. The tradeoff
+  is that anyone holding a copied QR can recover that shared session until the
+  handoff expires; closing or superseding the local dialog revokes the grant.
+- Browser pairing stores only a 15-minute Secure, HttpOnly, SameSite=Strict
+  cookie and never exposes the new device secret to JavaScript. Native clients
+  still need platform Keychain integration, and no physical second-device scan
+  has been accepted yet.
+- Paired browser devices are transient and revoked on logout or by the one-minute
+  expiry sweeper after their sessions lapse; tombstoned database rows remain for
+  auditability rather than being physically deleted.
+- The remote surface remains private-tailnet only. This is continuity between
+  Floyd surfaces, not a cross-application identity or context federation layer.

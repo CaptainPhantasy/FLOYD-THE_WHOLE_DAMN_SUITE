@@ -254,8 +254,11 @@ test("HTTP device and one-time handoff lifecycle returns the bound envelope", as
     }),
   });
   assert.equal(issue.status, 201);
-  const handoff = await issue.json() as { token: string; deep_link: string };
-  assert.match(handoff.deep_link, /^floyd:\/\/handoff\?/);
+  const handoff = await issue.json() as { token: string; deep_link: string; qr_svg: string; qr_content_type: string };
+  assert.match(handoff.deep_link, /^https:\/\/floyd\.test\/#handoff=/);
+  assert.equal(handoff.qr_content_type, "image/svg+xml");
+  assert.match(handoff.qr_svg, /<svg/);
+  assert.equal(handoff.qr_svg.includes(handoff.token), false);
 
   const consumed = await remoteSelfAuthenticatedPost("/api/handoffs/consume", {
     token: handoff.token,
@@ -271,7 +274,9 @@ test("HTTP device and one-time handoff lifecycle returns the bound envelope", as
   const remoteState = await remoteApi("/api/state", consumedBody.session.token);
   assert.equal(remoteState.status, 200);
   const remoteStateText = await remoteState.text();
-  assert.equal(remoteStateText.includes("credential_ref"), false);
+  const remoteStateBody = JSON.parse(remoteStateText) as { experience: { model_route: { credential_ref?: unknown } } };
+  assert.equal(remoteStateBody.experience.model_route.credential_ref ?? null, null);
+  assert.equal(remoteStateText.includes("floyd-connector:"), false);
   assert.equal(remoteStateText.includes("root_path"), false);
   const escapedActive = await remoteApi("/api/experience/primary", consumedBody.session.token, {
     method: "PATCH",
@@ -296,7 +301,7 @@ test("HTTP device and one-time handoff lifecycle returns the bound envelope", as
   assert.equal(replay.status, 409);
   assert.equal((await replay.json() as { error: string }).error, "handoff_consumed");
 
-  const beforeStale = await (await api("/api/experience/primary")).json() as { revision: number };
+  const beforeStale = await (await api("/api/experience/primary")).json() as { revision: number; selected_view: string };
   const staleIssue = await api("/api/handoffs", {
     method: "POST",
     body: JSON.stringify({ envelope_id: "primary", envelope_revision: beforeStale.revision, ttl_ms: 30_000 }),
@@ -312,8 +317,66 @@ test("HTTP device and one-time handoff lifecycle returns the bound envelope", as
     device_id: device.device_id,
     device_secret: device.secret,
   });
-  assert.equal(staleConsume.status, 409);
-  assert.equal((await staleConsume.json() as { error: string }).error, "handoff_stale");
+  assert.equal(staleConsume.status, 200);
+  const snapshotConsumption = await staleConsume.json() as { envelope: { revision: number; selected_view: string } };
+  assert.equal(snapshotConsumption.envelope.revision, beforeStale.revision);
+  assert.equal(snapshotConsumption.envelope.selected_view, beforeStale.selected_view);
+
+  const pairBase = await (await api("/api/experience/primary")).json() as { revision: number };
+  const pairIssue = await api("/api/handoffs", {
+    method: "POST",
+    body: JSON.stringify({ envelope_id: "primary", envelope_revision: pairBase.revision, ttl_ms: 30_000 }),
+  });
+  const pairGrant = await pairIssue.json() as { handoff_id: string; token: string };
+  const pairToken = pairGrant.token;
+  const missingOriginPair = await fetch(`${remoteBaseUrl}/api/handoffs/pair`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: pairToken }),
+  });
+  assert.equal(missingOriginPair.status, 403);
+  const loopbackOriginPair = await remoteSelfAuthenticatedPost("/api/handoffs/pair", { token: pairToken }, "http://127.0.0.1");
+  assert.equal(loopbackOriginPair.status, 403);
+  const paired = await remoteSelfAuthenticatedPost("/api/handoffs/pair", { token: pairToken });
+  assert.equal(paired.status, 200);
+  const pairCookie = paired.headers.get("set-cookie") ?? "";
+  assert.match(pairCookie, /__Host-floyd_session=/);
+  assert.match(pairCookie, /HttpOnly/);
+  assert.match(pairCookie, /Secure/);
+  assert.match(pairCookie, /SameSite=Strict/);
+  const pairedText = await paired.text();
+  assert.equal(pairedText.includes("fds_"), false);
+  const pairedBody = JSON.parse(pairedText) as { session: { session_id: string; device_id: string } };
+  const recoveredPair = await remoteSelfAuthenticatedPost("/api/handoffs/pair", { token: pairToken });
+  assert.equal(recoveredPair.status, 200);
+  const recoveredBody = await recoveredPair.json() as { session: { session_id: string; device_id: string } };
+  assert.deepEqual(recoveredBody.session, pairedBody.session);
+  const closeRecoveryWindow = await api(`/api/handoffs/${pairGrant.handoff_id}`, { method: "DELETE" });
+  assert.equal(closeRecoveryWindow.status, 200);
+  const revokedPairRetry = await remoteSelfAuthenticatedPost("/api/handoffs/pair", { token: pairToken });
+  assert.equal(revokedPairRetry.status, 410);
+  assert.equal((await revokedPairRetry.json() as { error: string }).error, "handoff_revoked");
+  const cookieState = await fetch(`${remoteBaseUrl}/api/state`, { headers: { cookie: pairCookie.split(";")[0]! } });
+  assert.equal(cookieState.status, 200);
+
+  const malformedCookie = await fetch(`${remoteBaseUrl}/api/state`, {
+    headers: { cookie: "__Host-floyd_session=%ZZ" },
+  });
+  assert.equal(malformedCookie.status, 401);
+
+  const invalidPairBody = await remoteSelfAuthenticatedPost("/api/handoffs/pair", null);
+  assert.equal(invalidPairBody.status, 400);
+  assert.equal((await invalidPairBody.json() as { error: string }).error, "invalid_input");
+
+  const priorQrBinary = process.env.FLOYD_QRENCODE_BIN;
+  process.env.FLOYD_QRENCODE_BIN = join(runtimeRoot, "missing-qrencode");
+  const failedQrIssue = await api("/api/handoffs", {
+    method: "POST",
+    body: JSON.stringify({ envelope_id: "primary", envelope_revision: pairBase.revision }),
+  });
+  if (priorQrBinary === undefined) delete process.env.FLOYD_QRENCODE_BIN;
+  else process.env.FLOYD_QRENCODE_BIN = priorQrBinary;
+  assert.equal(failedQrIssue.status, 503);
+  const failedQrRow = db.prepare(`SELECT revoked_at FROM experience_handoffs ORDER BY rowid DESC LIMIT 1`).get() as { revoked_at: string | null };
+  assert.notEqual(failedQrRow.revoked_at, null);
 
   const currentEnvelope = await (await api("/api/experience/primary")).json() as { revision: number };
   const streamIssue = await api("/api/handoffs", {
@@ -559,8 +622,8 @@ test("a fresh session attach receives a durable transcript snapshot", async () =
     method: "POST",
     body: JSON.stringify({
       device_id: "device-run-reader",
-      metadata: { surface: "read-only" },
-      allowed_scopes: ["health:read", "state:read", "experience:read", "run:read", "artifact:read"],
+      metadata: { surface: "bounded-continuation" },
+      allowed_scopes: ["health:read", "state:read", "experience:read", "experience:write", "run:read", "artifact:read"],
     }),
   });
   const readerDevice = await readerEnrollment.json() as { device_id: string; secret: string };
@@ -596,52 +659,42 @@ test("a fresh session attach receives a durable transcript snapshot", async () =
   const contextStreamReader = contextStreamResponse.body!.getReader();
   assert.equal((await contextStreamReader.read()).done, false);
   const beforeMove = await (await api("/api/experience/primary")).json() as { revision: number };
+  const remoteBeforeMove = await (await remoteApi("/api/experience/primary", readerSession.session.token)).json() as { revision: number };
   const remoteClear = await remoteApi("/api/experience/primary", readerSession.session.token, {
     method: "PATCH",
-    body: JSON.stringify({ expected_revision: beforeMove.revision, active: { project_id: null, session_id: null, run_id: null } }),
+    body: JSON.stringify({ expected_revision: remoteBeforeMove.revision, active: { project_id: null, session_id: null, run_id: null } }),
   });
   assert.equal(remoteClear.status, 403);
   const afterDeniedClear = await (await api("/api/experience/primary")).json() as { revision: number; active: { run_id: string | null } };
   assert.equal(afterDeniedClear.revision, beforeMove.revision);
   assert.equal(afterDeniedClear.active.run_id, "run-http");
-  const delayedPayload = JSON.stringify({ expected_revision: beforeMove.revision + 1, composer_draft: "must not cross contexts" });
-  let finishDelayedBody!: () => void;
-  const delayedBody = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(new TextEncoder().encode(delayedPayload.slice(0, -1)));
-      finishDelayedBody = () => {
-        controller.enqueue(new TextEncoder().encode(delayedPayload.slice(-1)));
-        controller.close();
-      };
-    },
-  });
-  const delayedPatch = fetch(`${remoteBaseUrl}/api/experience/primary`, {
-    method: "PATCH",
-    headers: { authorization: `Bearer ${readerSession.session.token}`, "content-type": "application/json" },
-    body: delayedBody,
-    duplex: "half",
-  } as RequestInit & { duplex: "half" });
-  await new Promise((resolve) => setTimeout(resolve, 25));
   const moveAway = await api("/api/experience/primary", {
     method: "PATCH",
     body: JSON.stringify({ expected_revision: beforeMove.revision, active: { project_id: null, session_id: null, run_id: null } }),
   });
   assert.equal(moveAway.status, 200);
-  finishDelayedBody();
-  const delayedPatchResponse = await delayedPatch;
-  assert.equal(delayedPatchResponse.status, 403);
-  assert.equal((await remoteApi("/api/state", readerSession.session.token)).status, 403);
-  assert.equal((await remoteApi("/api/experience/primary", readerSession.session.token)).status, 403);
-  const contextStreamClosed = await Promise.race([
-    (async () => {
-      for (let read = 0; read < 5; read += 1) {
-        try { if ((await contextStreamReader.read()).done) return true; } catch { return true; }
-      }
-      return false;
-    })(),
-    new Promise<false>((resolve) => setTimeout(() => resolve(false), 500)),
+  const snapshotStateResponse = await remoteApi("/api/state", readerSession.session.token);
+  assert.equal(snapshotStateResponse.status, 200);
+  const snapshotState = await snapshotStateResponse.json() as { experience: { active: { run_id: string } } };
+  assert.equal(snapshotState.experience.active.run_id, "run-http");
+  const snapshotEnvelopeResponse = await remoteApi("/api/experience/primary", readerSession.session.token);
+  assert.equal(snapshotEnvelopeResponse.status, 200);
+  const snapshotEnvelope = await snapshotEnvelopeResponse.json() as { revision: number; active: { run_id: string } };
+  assert.equal(snapshotEnvelope.active.run_id, "run-http");
+  const contextStreamStayedOpen = await Promise.race([
+    contextStreamReader.read().then(() => false, () => false),
+    new Promise<true>((resolve) => setTimeout(() => resolve(true), 100)),
   ]);
-  assert.equal(contextStreamClosed, true);
+  assert.equal(contextStreamStayedOpen, true);
+  await contextStreamReader.cancel();
+  const remoteDraft = await remoteApi("/api/experience/primary", readerSession.session.token, {
+    method: "PATCH",
+    body: JSON.stringify({ expected_revision: snapshotEnvelope.revision, composer_draft: "session-local continuation" }),
+  });
+  const remoteDraftText = await remoteDraft.text();
+  assert.equal(remoteDraft.status, 200, remoteDraftText);
+  const globalAfterRemoteDraft = await (await api("/api/experience/primary")).json() as { composer_draft: string };
+  assert.notEqual(globalAfterRemoteDraft.composer_draft, "session-local continuation");
   const movedEnvelope = await moveAway.json() as { revision: number };
   const restoreBound = await api("/api/experience/primary", {
     method: "PATCH",
