@@ -187,6 +187,26 @@ export class FloydBrowserClient {
     return this.request("DELETE", `/api/connectors/${encodeURIComponent(connectorId)}`, undefined, signal);
   }
 
+  connectedApps(signal) {
+    return this.request("GET", "/api/connected-apps", undefined, signal);
+  }
+
+  createConnectedApp(input, signal) {
+    return this.request("POST", "/api/connected-apps", input, signal);
+  }
+
+  startConnectedAppOAuth(connectedAppId, ttlMs, signal) {
+    return this.request("POST", `/api/connected-apps/${encodeURIComponent(connectedAppId)}/oauth/start`, { ttlMs }, signal);
+  }
+
+  refreshConnectedApp(connectedAppId, signal) {
+    return this.request("POST", `/api/connected-apps/${encodeURIComponent(connectedAppId)}/refresh`, {}, signal);
+  }
+
+  revokeConnectedApp(connectedAppId, signal) {
+    return this.request("DELETE", `/api/connected-apps/${encodeURIComponent(connectedAppId)}`, undefined, signal);
+  }
+
   /** Stream one user-configured provider through Core's normalized relay. */
   async *modelStream({ provider, apiKey, credentialRef, baseUrl, anthropicVersion, model, messages, signal }) {
     if (Boolean(apiKey) === Boolean(credentialRef)) {

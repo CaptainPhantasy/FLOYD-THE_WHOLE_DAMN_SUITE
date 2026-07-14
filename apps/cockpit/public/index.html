@@ -176,6 +176,7 @@
     <button class="rail-button" title="Evidence" aria-label="Evidence">EV</button>
     <button class="rail-button" id="surfaceHub" title="Floyd surfaces" aria-label="Floyd surfaces">SF</button>
     <div class="rail-spacer"></div>
+    <button class="rail-button" id="connectedApps" title="Connected applications" aria-label="Connected applications">CN</button>
     <button class="rail-button" id="modelSettings" title="Model routing settings" aria-label="Model routing settings">ST</button>
   </nav>
   <aside class="sidebar">
@@ -288,6 +289,7 @@ const app = {
   modelRoute: { provider: "opencode-go", model: "", baseUrl: "", credentialRef: null },
   modelKey: "",
   connectors: [],
+  connectedApps: [],
   surfaceAvailability: new Map(),
   surfaceAbort: null,
   surfaceNavigation: Promise.resolve(),
@@ -488,6 +490,7 @@ async function restoreEnvelope(envelope, { signal } = {}) {
       startNewTask({ publish: false });
     }
     if (envelope.selected_view === "model-settings") renderModelSettings({ publish: false });
+    if (envelope.selected_view === "connected-apps") renderConnectedAppsSettings({ publish: false });
     if (envelope.selected_view === "artifact" && envelope.selected_artifact_id
       && envelope.selected_artifact_id !== app.restoredArtifactId && app.currentRunId) {
       app.artifactAbort?.abort();
@@ -798,7 +801,7 @@ function renderModelSettings({ publish = true } = {}) {
       <label class="settings-field"><span>API key</span><input id="modelApiKey" type="password" value="" placeholder="Enter for this chat or store in selected connector" autocomplete="off"></label>
       <div class="settings-note">Ephemeral keys remain in page memory only. “Store in Core” sends the key once to Core encryption and retains only an opaque credential reference in this UI and the experience envelope.</div>
       <div class="event-actions"><button class="action-button" type="button" data-connector-refresh>Refresh connectors</button><button class="action-button" type="button" data-connector-store-key ${selectedConnector ? "" : "disabled"}>Store in Core</button><button class="action-button" type="button" data-connector-oauth ${selectedConnector?.authorizationUrl ? "" : "disabled"}>Start OAuth</button><button class="action-button danger" type="button" data-connector-revoke ${selectedConnector ? "" : "disabled"}>Revoke</button></div>
-      <div class="settings-note">OAuth setup uses Core-held PKCE state and callback exchange. Configuration alone is not proof that a provider login works; only a successful callback stores an OAuth credential reference.</div>
+      <div class="settings-note">OpenCode Zen, OpenCode Go, OpenAI, and Anthropic normally use API keys. Provider OAuth fields are only for a custom compatible endpoint that explicitly documents OAuth; connected applications use the separate Connections authority.</div>
       <button class="action-button primary" data-model-apply>Start model chat</button>
     </div>
     <div class="inspect-section"><div class="inspect-label">Create Core connector</div>
@@ -882,6 +885,46 @@ async function completeOAuthCallback() {
   if (!profile) throw new Error("Core stored the OAuth credential but its connector profile was not returned.");
   await selectConnector(profile, result.credentialRef);
   return true;
+}
+
+function renderConnectedAppsSettings({ publish = true } = {}) {
+  el("inspectStatus").textContent = "Connected applications";
+  const connectionRows = app.connectedApps.map((profile) => `
+    <div class="inspect-section" data-connected-app-id="${escapeHtml(profile.id)}">
+      <div class="inspect-label">${escapeHtml(profile.displayName)}</div>
+      <div class="inspect-row"><span>Status</span><code>${escapeHtml(profile.status)}</code></div>
+      <div class="inspect-row"><span>Resource</span><code title="${escapeHtml(profile.resourceUrl)}">${escapeHtml(profile.resourceUrl)}</code></div>
+      <div class="inspect-row"><span>Issuer</span><code title="${escapeHtml(profile.issuer)}">${escapeHtml(profile.issuer)}</code></div>
+      <div class="inspect-row"><span>Scopes</span><code>${escapeHtml((profile.scopesGranted.length ? profile.scopesGranted : profile.scopesRequested).join(" ") || "provider default")}</code></div>
+      <div class="event-actions">
+        <button class="action-button primary" type="button" data-connected-app-authorize="${escapeHtml(profile.id)}">${profile.status === "connected" ? "Reconnect" : "Connect"}</button>
+        <button class="action-button" type="button" data-connected-app-refresh="${escapeHtml(profile.id)}" ${profile.status === "connected" ? "" : "disabled"}>Refresh token</button>
+        <button class="action-button danger" type="button" data-connected-app-revoke="${escapeHtml(profile.id)}" ${profile.status === "connected" || profile.status === "revocation_pending" ? "" : "disabled"}>Disconnect</button>
+      </div>
+    </div>`).join("");
+  el("inspectorBody").innerHTML = `
+    ${connectionRows || '<div class="inspect-section"><div class="inspect-label">No connected applications</div><div class="settings-note">Add a remote MCP application below. Core performs OAuth discovery, PKCE, token refresh, and revocation; tokens never enter this page.</div></div>'}
+    <div class="inspect-section"><div class="inspect-label">Add remote MCP application</div>
+      <label class="settings-field"><span>ID</span><input id="connectedAppId" value="notion" autocomplete="off"></label>
+      <label class="settings-field"><span>Name</span><input id="connectedAppName" value="Notion" autocomplete="off"></label>
+      <label class="settings-field"><span>MCP resource URL</span><input id="connectedAppUrl" value="https://mcp.notion.com/mcp" autocomplete="off"></label>
+      <label class="settings-field"><span>OAuth scopes (optional)</span><input id="connectedAppScopes" autocomplete="off"></label>
+      <button class="action-button" type="button" data-connected-app-create>Discover application</button>
+      <div class="settings-note">Connected-app OAuth is separate from model routing. Core discovers and pins the resource, issuer, endpoints, and client registration before authorization.</div>
+    </div>`;
+  if (publish && !app.restoringEnvelope) patchEnvelope({ selected_view: "connected-apps" }).catch(notify);
+}
+
+async function refreshConnectedApps() {
+  const result = await client.connectedApps();
+  app.connectedApps = Array.isArray(result.connectedApps) ? result.connectedApps : [];
+  return app.connectedApps;
+}
+
+async function openConnectedApps({ publish = true } = {}) {
+  renderConnectedAppsSettings({ publish });
+  await refreshConnectedApps();
+  renderConnectedAppsSettings({ publish: false });
 }
 
 function shellQuote(value) {
@@ -1386,6 +1429,45 @@ el("messages").addEventListener("click", async (event) => {
   } catch (error) { notify(error); }
 });
 el("inspectorBody").addEventListener("click", async (event) => {
+  if (event.target.closest("[data-connected-app-create]")) {
+    try {
+      await client.createConnectedApp({
+        id: el("connectedAppId").value.trim(),
+        displayName: el("connectedAppName").value.trim(),
+        resourceUrl: el("connectedAppUrl").value.trim(),
+        scopes: el("connectedAppScopes").value.trim().split(/\s+/).filter(Boolean),
+      });
+      await refreshConnectedApps();
+      renderConnectedAppsSettings({ publish: false });
+    } catch (error) { notify(error); }
+    return;
+  }
+  const authorizeConnectedApp = event.target.closest("[data-connected-app-authorize]");
+  if (authorizeConnectedApp) {
+    try {
+      const started = await client.startConnectedAppOAuth(authorizeConnectedApp.dataset.connectedAppAuthorize, 300_000);
+      location.assign(started.authorizationUrl);
+    } catch (error) { notify(error); }
+    return;
+  }
+  const refreshConnectedApp = event.target.closest("[data-connected-app-refresh]");
+  if (refreshConnectedApp) {
+    try {
+      await client.refreshConnectedApp(refreshConnectedApp.dataset.connectedAppRefresh);
+      await refreshConnectedApps();
+      renderConnectedAppsSettings({ publish: false });
+    } catch (error) { notify(error); }
+    return;
+  }
+  const revokeConnectedApp = event.target.closest("[data-connected-app-revoke]");
+  if (revokeConnectedApp) {
+    try {
+      await client.revokeConnectedApp(revokeConnectedApp.dataset.connectedAppRevoke);
+      await refreshConnectedApps();
+      renderConnectedAppsSettings({ publish: false });
+    } catch (error) { notify(error); }
+    return;
+  }
   if (event.target.closest("[data-model-apply]")) {
     try { startModelChat(); } catch (error) { notify(error); }
     return;
@@ -1591,6 +1673,7 @@ el("surfaceGrid").addEventListener("click", async (event) => {
   } catch (error) { notify(error); }
 });
 el("modelSettings").addEventListener("click", () => remoteMode ? notify(new Error("Provider settings require the local authority surface.")) : openModelSettings().catch(notify));
+el("connectedApps").addEventListener("click", () => remoteMode ? notify(new Error("Connected-application management requires the local authority surface.")) : openConnectedApps().catch(notify));
 el("modeButton").addEventListener("click", () => {
   if (remoteMode) return;
   if (app.mode === "model") { startNewTask(); return; }
@@ -1614,7 +1697,7 @@ setInterval(refreshHealth, 5000);
 app.refreshTimer = setInterval(() => refreshState(), 3500);
 if (remoteMode) {
   el("boundaryLabel").textContent = "Private remote continuation";
-  for (const id of ["newTask", "modelSettings", "shareHandoff", "acceptRun", "rejectRun", "escalateRun"]) el(id).disabled = true;
+  for (const id of ["newTask", "modelSettings", "connectedApps", "shareHandoff", "acceptRun", "rejectRun", "escalateRun"]) el(id).disabled = true;
   el("modeButton").disabled = true;
 }
 async function confirmRemoteDeviceSession() {
@@ -1652,6 +1735,14 @@ app.experienceReady = initializeExperience();
 try { await app.experienceReady; } catch (error) { if (token()) notify(error); }
 try { await completeOAuthCallback(); } catch (error) { notify(error); }
 if (query.get("settings") === "model") openModelSettings().catch(notify);
+if (query.get("settings") === "connections") {
+  openConnectedApps().then(() => {
+    if (query.get("connection_error")) notify(new Error(`Connected-app OAuth failed: ${query.get("connection_error")}`));
+    const clean = new URLSearchParams(location.search);
+    clean.delete("connected_app"); clean.delete("connection_error");
+    history.replaceState({}, "", `${location.pathname}?${clean.toString()}`);
+  }).catch(notify);
+}
 </script>
 </body>
 </html>

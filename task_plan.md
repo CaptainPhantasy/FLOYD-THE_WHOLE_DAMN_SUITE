@@ -379,8 +379,10 @@ and physical/external proof remain separate truth states.
   Core state plus the admitted surface inventory, Floyd Desktop rendered inside
   the integrated shell, the HttpOnly session remained unavailable to browser
   JavaScript, logout returned 200, and the next state request returned 401.
-- [ ] Exercise one real provider OAuth callback/refresh/revoke lifecycle; mock
-  provider coverage remains implementation proof, not external-provider proof.
+- [ ] Exercise one real connected-application OAuth callback/refresh/revoke
+  lifecycle. Core now keeps this authority separate from model providers,
+  whose documented authentication is API-key based; mock coverage remains
+  implementation proof, not external-provider proof.
 - [x] Resolve the remote application boundary with four Core-owned,
   device-session-authenticated, provenance-gated HTTP/WebSocket relays behind
   tailnet HTTPS. Live rendered proof opened Desktop, IDE, TerminalOne, Launcher,

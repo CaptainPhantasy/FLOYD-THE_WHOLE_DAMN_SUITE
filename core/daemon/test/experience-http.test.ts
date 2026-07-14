@@ -80,6 +80,39 @@ const expectedSurfaceIdentity = new Map([
 ]);
 const observedSurfaceHealthUrls: string[] = [];
 let mismatchedSurfaceId: string | null = null;
+const connectedAppCalls: Array<{ url: string; form: URLSearchParams | null }> = [];
+const connectedAppFetch: typeof globalThis.fetch = async (input, init = {}) => {
+  const url = String(input);
+  const form = init.body instanceof URLSearchParams ? new URLSearchParams(init.body) : null;
+  connectedAppCalls.push({ url, form });
+  if (url === "https://mcp.http.test/mcp") {
+    return new Response(null, { status: 401, headers: { "www-authenticate": "Bearer resource_metadata=\"https://mcp.http.test/.well-known/oauth-protected-resource/mcp\"" } });
+  }
+  if (url === "https://mcp.http.test/.well-known/oauth-protected-resource/mcp") {
+    return Response.json({ resource: "https://mcp.http.test/mcp", authorization_servers: ["https://auth.http.test"] });
+  }
+  if (url === "https://auth.http.test/.well-known/oauth-authorization-server") {
+    return Response.json({
+      issuer: "https://auth.http.test",
+      authorization_endpoint: "https://auth.http.test/authorize",
+      token_endpoint: "https://auth.http.test/token",
+      registration_endpoint: "https://auth.http.test/register",
+      revocation_endpoint: "https://auth.http.test/revoke",
+      grant_types_supported: ["authorization_code", "refresh_token"],
+      code_challenge_methods_supported: ["S256"],
+      token_endpoint_auth_methods_supported: ["none"],
+    });
+  }
+  if (url === "https://auth.http.test/register") return Response.json({ client_id: "http-client" }, { status: 201 });
+  if (url === "https://auth.http.test/token" && form?.get("grant_type") === "authorization_code") {
+    return Response.json({ access_token: "http-access-one", refresh_token: "http-refresh-one", token_type: "Bearer", expires_in: 3600 });
+  }
+  if (url === "https://auth.http.test/token" && form?.get("grant_type") === "refresh_token") {
+    return Response.json({ access_token: "http-access-two", refresh_token: "http-refresh-two", token_type: "Bearer", expires_in: 3600 });
+  }
+  if (url === "https://auth.http.test/revoke") return new Response(null, { status: 204 });
+  throw new Error(`unexpected connected app request ${url}`);
+};
 const surfaceHealthFetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
   const url = String(input);
   observedSurfaceHealthUrls.push(url);
@@ -91,7 +124,7 @@ const surfaceHealthFetch = async (input: string | URL | Request, init?: RequestI
     identity: identity.surface_id === mismatchedSurfaceId ? { ...identity, source_commit: "donor-or-stale-commit" } : identity,
   });
 };
-const server = startGateway(db, engine, process.pid, new Date().toISOString(), { surfaceHealthFetch });
+const server = startGateway(db, engine, process.pid, new Date().toISOString(), { surfaceHealthFetch, connectedAppFetch });
 const remoteServer = startRemoteGateway(db, engine, process.pid, new Date().toISOString());
 if (!server.listening) await once(server, "listening");
 if (!remoteServer.listening) await once(remoteServer, "listening");
@@ -709,6 +742,50 @@ test("HTTP connector authority keeps secrets opaque and injects only endpoint-bo
   } finally {
     await new Promise<void>((resolve, reject) => upstream.close((error) => error ? reject(error) : resolve()));
   }
+});
+
+test("HTTP connected-app OAuth keeps callback exchange server-owned and supports explicit refresh and revocation", async () => {
+  connectedAppCalls.length = 0;
+  const created = await api("/api/connected-apps", {
+    method: "POST",
+    body: JSON.stringify({ id: "http-notes", displayName: "HTTP Notes", resourceUrl: "https://mcp.http.test/mcp" }),
+  });
+  assert.equal(created.status, 201);
+  const createdBody = await created.json() as { id: string; resourceMetadataUrl: string; status: string };
+  assert.equal(createdBody.id, "http-notes");
+  assert.equal(createdBody.resourceMetadataUrl, "https://mcp.http.test/.well-known/oauth-protected-resource/mcp");
+  assert.equal(createdBody.status, "discovered");
+
+  const started = await api("/api/connected-apps/http-notes/oauth/start", { method: "POST", body: "{}" });
+  assert.equal(started.status, 201);
+  const startedBody = await started.json() as { authorizationUrl: string };
+  const authorization = new URL(startedBody.authorizationUrl);
+  assert.equal(authorization.searchParams.get("resource"), "https://mcp.http.test/mcp");
+  const state = authorization.searchParams.get("state")!;
+
+  const callback = await fetch(`${baseUrl}/api/connected-apps/oauth/callback?state=${encodeURIComponent(state)}&code=server-only-code`, {
+    redirect: "manual",
+  });
+  assert.equal(callback.status, 303);
+  assert.equal(callback.headers.get("location"), "/?settings=connections&connected_app=http-notes");
+  assert.equal(callback.headers.get("referrer-policy"), "no-referrer");
+  const tokenCall = connectedAppCalls.find((call) => call.form?.get("grant_type") === "authorization_code")!;
+  assert.equal(tokenCall.form!.get("code"), "server-only-code");
+  assert.equal(tokenCall.form!.get("resource"), "https://mcp.http.test/mcp");
+
+  const listedText = await (await api("/api/connected-apps")).text();
+  assert.match(listedText, /"status":\s*"connected"/);
+  assert.doesNotMatch(listedText, /http-access|http-refresh|server-only-code|credentialRef/);
+
+  const refreshed = await api("/api/connected-apps/http-notes/refresh", { method: "POST", body: "{}" });
+  assert.equal(refreshed.status, 200);
+  assert.equal((await refreshed.json() as { connectedAppId: string }).connectedAppId, "http-notes");
+  assert.equal(connectedAppCalls.filter((call) => call.form?.get("grant_type") === "refresh_token").length, 1);
+
+  const revoked = await api("/api/connected-apps/http-notes", { method: "DELETE" });
+  assert.equal(revoked.status, 200);
+  assert.deepEqual(await revoked.json(), { connectedAppId: "http-notes", revoked: true, upstreamStatus: 204 });
+  assert.equal((await remoteApi("/api/connected-apps", "invalid")).status, 403);
 });
 
 test("a fresh session attach receives a durable transcript snapshot", async () => {

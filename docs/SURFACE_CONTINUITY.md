@@ -87,5 +87,15 @@ to validate during real use, not reasons to redefine the requested outcome.
 - The IDE's local-folder Git and search implementations are not shipped. They
   are disabled with an explicit explanation instead of silently using the
   wrong virtual workspace.
-- Physical second-device QR acceptance, native Keychain storage, and a real
-  provider OAuth round trip remain separate operational gates.
+- Native Keychain storage and a real connected-application OAuth
+  callback/refresh/revoke round trip remain separate operational gates.
+- Connected-app URL checks reject literal private, loopback, and link-local
+  hosts, but Node's default fetch cannot pin DNS resolution. A malicious public
+  hostname can still attempt DNS rebinding between validation and connection;
+  do not add untrusted MCP URLs until the transport uses a pinned resolver.
+- A rotating refresh response can be accepted upstream and lost if the process
+  dies before SQLite commits the replacement. Core then requires
+  reauthorization; it never replays an ambiguously consumed refresh token.
+- Upstream revocation failure produces `revocation_pending`: local credentials
+  are already unusable, but the provider-side grant may remain live until the
+  provider accepts a later revocation or the user removes it there.

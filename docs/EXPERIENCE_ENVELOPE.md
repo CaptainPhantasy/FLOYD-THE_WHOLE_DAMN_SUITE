@@ -29,6 +29,10 @@ Clients may update presentation state and their own capability/cursor record.
 They may not author pending questions or permissions. Core derives those from
 the active OpenCode engine session. Model keys and OAuth tokens are forbidden
 from the envelope; only encrypted Core credential references may persist.
+Model-provider credentials and connected-application credentials are separate
+authorities. OpenCode Zen/Go, OpenAI, and Anthropic use the model connector
+store and cannot receive an MCP token. Remote MCP applications use the
+connected-app authority and cannot be selected by the model gateway.
 Changing the active session or run automatically clears pending asks, selected
 artifact, cursor, event ID, and per-surface replay positions. Selected
 artifacts must belong to the active run.
@@ -118,10 +122,25 @@ Sharp edges remain: a copied QR bearer can recover the shared session until the
 issuer revokes it or it expires; screenshots, camera rolls, extensions, and a
 compromised receiver can capture the fragment before it is scrubbed. Native
 clients still need platform-secure storage, and the private HTTPS lifecycle has
-been proved from the host through its tailnet name, not yet from a second
-physical device. QR issuance also fails closed when the local system
+been proved from the host and from a second physical tailnet MacBook. That run
+consumed a new one-time handoff, rendered Floyd Desktop in the unified remote
+shell, revoked the device session, and received 401 on its next state request.
+QR issuance also fails closed when the local system
 `qrencode` binary is missing, incompatible, timed out, or returns disallowed
 SVG geometry.
+
+Connected-application OAuth is local-authority-only. Core performs RFC 9728
+protected-resource discovery, pins the exact MCP resource and issuer, uses
+RFC 8414 or OpenID metadata, requires S256 PKCE, and falls back to RFC 7591
+dynamic client registration when a public client is not pre-registered. The
+authorization code is delivered directly to Core's loopback callback and is
+immediately replaced by a 303 to a clean Cockpit URL; browser JavaScript never
+receives the code, state, access token, refresh token, or client secret. Access,
+refresh, client, and PKCE secrets use a separate 0600 Core key and AES-256-GCM
+contexts bound to the connected-app ID, issuer, and exact resource URL. Refresh
+is serialized and rotating refresh tokens are replaced atomically. Disconnect
+revokes the refresh token before the access token and erases local ciphertext
+even when upstream revocation is uncertain.
 
 ## Completion boundary
 

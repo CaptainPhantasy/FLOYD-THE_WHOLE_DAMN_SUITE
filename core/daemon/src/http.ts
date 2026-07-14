@@ -27,6 +27,7 @@ import { normalizeEngineEvent, type SessionMap } from "./live-channel.ts";
 import { classifyEngineEvent, SessionBuffer } from "./session-channel.ts";
 import { relayProviderRequest } from "./provider-gateway.ts";
 import { ConnectorAuthorityError, ConnectorAuthorityService } from "./connector-authority.ts";
+import { ConnectedAppAuthorityError, ConnectedAppAuthorityService } from "./connected-app-authority.ts";
 import { renderQrSvg } from "./qr.ts";
 import {
   ExperienceConflictError,
@@ -124,6 +125,8 @@ type SurfaceHealthFetch = (input: string | URL | Request, init?: RequestInit) =>
 type GatewayDependencies = {
   /** Test seam only. Callers cannot alter the fixed admitted URL registry. */
   surfaceHealthFetch?: SurfaceHealthFetch;
+  /** Test seam for external OAuth discovery and token endpoints. */
+  connectedAppFetch?: typeof globalThis.fetch;
 };
 
 async function boundedHealthJson(response: Response): Promise<Record<string, unknown>> {
@@ -769,6 +772,11 @@ function createGateway(
     masterKeyPath: PATHS.connectorMasterKey,
     evidence: (event) => appendEvidence(db, event.type, event.actor, event.payload),
   }) : null;
+  const connectedApps = boundary === "local" ? new ConnectedAppAuthorityService(db, {
+    masterKeyPath: PATHS.connectedAppMasterKey,
+    fetch: dependencies.connectedAppFetch,
+    evidence: (event) => appendEvidence(db, event.type, event.actor, event.payload),
+  }) : null;
 
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", `http://${LOOPBACK}:${CORE_PORT}`);
@@ -811,8 +819,10 @@ function createGateway(
       ? gatewayAuth ?? ""
       : bearerAuth || deviceCookie;
     const isStatic = !path.startsWith("/api/") && !isProviderGateway;
-    const selfAuthenticating = req.method === "POST"
-      && (path === "/api/devices/authenticate" || path === "/api/handoffs/consume" || path === "/api/handoffs/pair");
+    const connectedAppOAuthCallback = boundary === "local" && req.method === "GET"
+      && path === "/api/connected-apps/oauth/callback";
+    const selfAuthenticating = connectedAppOAuthCallback || (req.method === "POST"
+      && (path === "/api/devices/authenticate" || path === "/api/handoffs/consume" || path === "/api/handoffs/pair"));
     if (selfAuthenticating) {
       if (path === "/api/handoffs/pair" && boundary === "remote" && !req.headers.origin) {
         return send(res, 403, { error: "browser pairing requires the configured remote Origin" });
@@ -874,6 +884,26 @@ function createGateway(
     }
 
     try {
+      if (connectedAppOAuthCallback) {
+        res.setHeader("cache-control", "no-store");
+        res.setHeader("referrer-policy", "no-referrer");
+        let location = "/?settings=connections";
+        try {
+          const state = url.searchParams.get("state") ?? "";
+          const code = url.searchParams.get("code") ?? "";
+          if (url.searchParams.has("error")) {
+            throw new ConnectedAppAuthorityError("oauth_authorization_denied", "connected app authorization was denied", 400);
+          }
+          const credentialRef = await connectedApps!.completeOAuth(state, code, "oauth-callback", requestAbortSignal(req, res));
+          const connectedAppId = credentialRef.slice("floyd-connected-app:".length);
+          location += `&connected_app=${encodeURIComponent(connectedAppId)}`;
+        } catch (error) {
+          const code = error instanceof ConnectedAppAuthorityError ? error.code : "oauth_callback_failed";
+          location += `&connection_error=${encodeURIComponent(code)}`;
+        }
+        res.writeHead(303, { location });
+        return res.end();
+      }
       if (isProviderGateway) {
         if (req.method !== "POST") return send(res, 405, { error: "gateway is POST" });
         const credentialRef = Array.isArray(req.headers["x-floyd-credential-ref"])
@@ -923,6 +953,41 @@ function createGateway(
       if (path === "/api/connectors" && req.method === "GET") {
         res.setHeader("cache-control", "no-store");
         return send(res, 200, { connectors: connectors!.profiles() });
+      }
+      if (path === "/api/connected-apps" && req.method === "GET") {
+        res.setHeader("cache-control", "no-store");
+        return send(res, 200, { connectedApps: connectedApps!.profiles() });
+      }
+      if (path === "/api/connected-apps" && req.method === "POST") {
+        res.setHeader("cache-control", "no-store");
+        const body = requestObject(await readBody(req)) as unknown as Parameters<ConnectedAppAuthorityService["createProfile"]>[0];
+        return send(res, 201, await connectedApps!.createProfile(body, "local-api", requestAbortSignal(req, res)));
+      }
+      const connectedAppOAuthStart = path.match(/^\/api\/connected-apps\/([^/]+)\/oauth\/start$/);
+      if (connectedAppOAuthStart && req.method === "POST") {
+        res.setHeader("cache-control", "no-store");
+        const body = requestObject(await readBody(req));
+        return send(res, 201, await connectedApps!.beginOAuth(
+          decodeURIComponent(connectedAppOAuthStart[1]!),
+          `http://${LOOPBACK}:${CORE_PORT}/api/connected-apps/oauth/callback`,
+          body.ttlMs === undefined ? undefined : typeof body.ttlMs === "number" ? body.ttlMs : Number.NaN,
+          "local-api",
+          requestAbortSignal(req, res),
+        ));
+      }
+      const connectedAppRefresh = path.match(/^\/api\/connected-apps\/([^/]+)\/refresh$/);
+      if (connectedAppRefresh && req.method === "POST") {
+        res.setHeader("cache-control", "no-store");
+        return send(res, 200, await connectedApps!.refreshNow(
+          decodeURIComponent(connectedAppRefresh[1]!), requestAbortSignal(req, res),
+        ));
+      }
+      const connectedApp = path.match(/^\/api\/connected-apps\/([^/]+)$/);
+      if (connectedApp && req.method === "DELETE") {
+        res.setHeader("cache-control", "no-store");
+        return send(res, 200, await connectedApps!.revoke(
+          decodeURIComponent(connectedApp[1]!), "local-api", requestAbortSignal(req, res),
+        ));
       }
       if (path === "/api/connectors" && req.method === "POST") {
         res.setHeader("cache-control", "no-store");
@@ -1676,12 +1741,15 @@ function createGateway(
       const status = err instanceof ExperienceSecurityError
         ? err.httpStatus
         : err instanceof ConnectorAuthorityError ? err.httpStatus
+        : err instanceof ConnectedAppAuthorityError ? err.httpStatus
         : err instanceof RequestJsonError ? 400
         : err instanceof RequestBodyTooLargeError ? 413
         : typeof err === "object" && err && "statusCode" in err ? Number(err.statusCode) : 500;
       const body = err instanceof ExperienceSecurityError
         ? { error: err.code, message: err.message }
         : err instanceof ConnectorAuthorityError
+          ? err.upstream ?? { error: err.code, message: err.message }
+        : err instanceof ConnectedAppAuthorityError
           ? err.upstream ?? { error: err.code, message: err.message }
         : err instanceof RequestJsonError ? { error: "invalid_json", message: err.message }
         : err instanceof RequestBodyTooLargeError ? { error: "payload_too_large", message: err.message }

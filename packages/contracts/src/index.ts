@@ -203,6 +203,41 @@ export interface ConnectorOAuthStart {
   expiresAt: string;
 }
 
+// ---------- Core-owned connected application authority ----------
+
+/** Sanitized remote MCP application metadata. OAuth secrets never cross this contract. */
+export interface ConnectedAppProfile {
+  id: string;
+  displayName: string;
+  resourceUrl: string;
+  resourceMetadataUrl: string;
+  issuer: string;
+  authorizationUrl: string;
+  tokenUrl: string;
+  registrationUrl: string | null;
+  revocationUrl: string | null;
+  scopesSupported: string[];
+  scopesRequested: string[];
+  scopesGranted: string[];
+  registrationMethod: "dynamic" | "pre_registered";
+  clientAuthMethod: "none" | "client_secret_post";
+  expiresAt: string | null;
+  status: "discovered" | "authorization_required" | "connected" | "refreshing" | "reauth_required" | "revocation_pending" | "revoked";
+}
+
+export interface ConnectedAppProfileInput {
+  id: string;
+  displayName: string;
+  resourceUrl: string;
+  scopes?: string[];
+}
+
+export interface ConnectedAppOAuthStart {
+  connectedAppId: string;
+  authorizationUrl: string;
+  expiresAt: string;
+}
+
 export interface RouteReceipt {
   provider: string;
   model: string;

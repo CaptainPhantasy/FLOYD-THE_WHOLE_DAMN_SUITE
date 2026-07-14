@@ -19,6 +19,9 @@ import {
   type ConnectorProfile,
   type ConnectorProfileInput,
   type ConnectorOAuthStart,
+  type ConnectedAppProfile,
+  type ConnectedAppProfileInput,
+  type ConnectedAppOAuthStart,
   type Run,
   type Session,
 } from "@floyd/contracts";
@@ -337,6 +340,26 @@ export class FloydClient {
 
   revokeConnector(connectorId: string, signal?: AbortSignal): Promise<{ connectorId: string; revoked: boolean; upstreamStatus: number | null }> {
     return this.request("DELETE", `/api/connectors/${encodeURIComponent(connectorId)}`, undefined, signal);
+  }
+
+  connectedApps(signal?: AbortSignal): Promise<{ connectedApps: ConnectedAppProfile[] }> {
+    return this.request("GET", "/api/connected-apps", undefined, signal);
+  }
+
+  createConnectedApp(input: ConnectedAppProfileInput, signal?: AbortSignal): Promise<ConnectedAppProfile> {
+    return this.request("POST", "/api/connected-apps", input, signal);
+  }
+
+  startConnectedAppOAuth(connectedAppId: string, ttlMs?: number, signal?: AbortSignal): Promise<ConnectedAppOAuthStart> {
+    return this.request("POST", `/api/connected-apps/${encodeURIComponent(connectedAppId)}/oauth/start`, { ttlMs }, signal);
+  }
+
+  refreshConnectedApp(connectedAppId: string, signal?: AbortSignal): Promise<{ connectedAppId: string; expiresAt: string | null }> {
+    return this.request("POST", `/api/connected-apps/${encodeURIComponent(connectedAppId)}/refresh`, {}, signal);
+  }
+
+  revokeConnectedApp(connectedAppId: string, signal?: AbortSignal): Promise<{ connectedAppId: string; revoked: boolean; upstreamStatus: number | null }> {
+    return this.request("DELETE", `/api/connected-apps/${encodeURIComponent(connectedAppId)}`, undefined, signal);
   }
 
   /**

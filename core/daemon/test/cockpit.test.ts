@@ -118,7 +118,7 @@ test("remote cockpit is continuation-only and disables local authority controls"
   assert.match(html, /Remote continuation cannot create a new run/);
   assert.match(html, /Run decisions require the local authority surface/);
   assert.match(html, /Private remote continuation/);
-  assert.match(html, /\["newTask", "modelSettings", "shareHandoff", "acceptRun", "rejectRun", "escalateRun"\]/);
+  assert.match(html, /\["newTask", "modelSettings", "connectedApps", "shareHandoff", "acceptRun", "rejectRun", "escalateRun"\]/);
   assert.match(html, /client\.pairExperienceHandoff\(handoffToken\)/);
   assert.match(html, /async function confirmRemoteDeviceSession/);
   assert.match(html, /\[401, 403\]\.includes\(error\.status\)/);
@@ -160,7 +160,20 @@ test("cockpit exposes user-driven model routing without persisting provider keys
   assert.match(html, /client\.completeConnectorOAuth/);
   assert.match(html, /client\.revokeConnector/);
   assert.match(html, /credentialRef: app\.modelRoute\.credentialRef/);
-  assert.match(html, /Configuration alone is not proof that a provider login works/);
+  assert.match(html, /normally use API keys/);
+});
+
+test("cockpit keeps connected-application OAuth server-owned and separate from model credentials", () => {
+  assert.match(html, /id="connectedApps"/);
+  assert.match(html, /client\.connectedApps\(\)/);
+  assert.match(html, /client\.createConnectedApp/);
+  assert.match(html, /client\.startConnectedAppOAuth/);
+  assert.match(html, /client\.refreshConnectedApp/);
+  assert.match(html, /client\.revokeConnectedApp/);
+  assert.match(html, /https:\/\/mcp\.notion\.com\/mcp/);
+  const connectedSection = html.slice(html.indexOf("function renderConnectedAppsSettings"), html.indexOf("function shellQuote"));
+  assert.doesNotMatch(connectedSection, /credentialRef|access_token|refresh_token/);
+  assert.doesNotMatch(connectedSection, /completeConnectedAppOAuth/);
 });
 
 test("cockpit connector selection publishes only opaque credential references", async () => {
