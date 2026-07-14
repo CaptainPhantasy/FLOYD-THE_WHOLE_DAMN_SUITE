@@ -35,10 +35,11 @@ export class FloydBrowserClient {
   }
 
   async request(method, path, body, signal) {
+    const token = await this.token();
     const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
       method,
       headers: {
-        authorization: `Bearer ${await this.token()}`,
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
         ...(body !== undefined ? { "content-type": "application/json" } : {}),
       },
       body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -244,10 +245,11 @@ export class FloydBrowserClient {
   }
 
   async *stream(path, { method = "GET", body, lastEventId, signal } = {}) {
+    const token = await this.token();
     const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
       method,
       headers: {
-        authorization: `Bearer ${await this.token()}`,
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
         accept: "text/event-stream",
         ...(body !== undefined ? { "content-type": "application/json" } : {}),
         ...(lastEventId ? { "last-event-id": lastEventId } : {}),

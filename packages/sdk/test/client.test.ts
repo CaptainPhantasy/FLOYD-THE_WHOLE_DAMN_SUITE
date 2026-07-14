@@ -32,6 +32,19 @@ test("client forwards bearer auth, JSON, and exact upstream errors", async () =>
   );
 });
 
+test("client omits an empty bearer header for cookie-authenticated remote surfaces", async () => {
+  let seen: Request | undefined;
+  const client = new FloydClient({
+    token: "",
+    fetch: async (input, init) => {
+      seen = input instanceof Request ? input : new Request(input, init);
+      return Response.json({ ok: true });
+    },
+  });
+  assert.deepEqual(await client.health(), { ok: true });
+  assert.equal(seen?.headers.has("authorization"), false);
+});
+
 test("SSE parser normalizes CRLF, multiline data, resume id, and cancels on break", async () => {
   let cancelled = false;
   let lastEventId: string | null = null;

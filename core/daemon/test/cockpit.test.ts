@@ -90,9 +90,11 @@ test("Surface Hub reports Core-restored continuity and the authenticated remote 
   assert.match(html, /data-surface-open=/);
   assert.match(html, /function openIntegratedSurface/);
   assert.match(html, /app\.surfaceAvailability\.get\(surface\.id\)\?\.verified !== true/);
+  assert.match(html, /if \(remoteMode && app\.surfaceAvailability\.get\(surface\.id\)\?\.verified !== true\) return null/);
   assert.match(html, /target\.searchParams\.set\("floyd", "continue"\)/);
   assert.match(html, /target\.searchParams\.set\("floyd", "integrated"\)/);
-  assert.match(html, /el\("surfaceFrame"\)\.src = target/);
+  assert.match(html, /frame\.src = target/);
+  assert.match(html, /floyd:continue-context/);
   assert.match(html, /surfaceNavigation: Promise\.resolve\(\)/);
   assert.match(html, /function enqueueSurfaceNavigation/);
   assert.match(html, /experienceReady: null/);
@@ -118,6 +120,9 @@ test("remote cockpit is continuation-only and disables local authority controls"
   assert.match(html, /Private remote continuation/);
   assert.match(html, /\["newTask", "modelSettings", "shareHandoff", "acceptRun", "rejectRun", "escalateRun"\]/);
   assert.match(html, /client\.pairExperienceHandoff\(handoffToken\)/);
+  assert.match(html, /async function confirmRemoteDeviceSession/);
+  assert.match(html, /\[401, 403\]\.includes\(error\.status\)/);
+  assert.match(html, /await confirmRemoteDeviceSession\(\)/);
   assert.match(html, /history\.replaceState/);
   assert.match(html, /sessionStorage\.removeItem\("floyd_gateway_token"\)/);
 });

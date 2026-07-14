@@ -125,10 +125,11 @@ export class FloydClient {
   }
 
   async request<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
+    const token = await this.token();
     const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
       method,
       headers: {
-        authorization: `Bearer ${await this.token()}`,
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
         ...(body !== undefined ? { "content-type": "application/json" } : {}),
       },
       body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -346,10 +347,11 @@ export class FloydClient {
    * browser tab or client surface retains an unread response buffer.
    */
   async *stream(path: string, options: { method?: "GET" | "POST"; body?: unknown; lastEventId?: string; signal?: AbortSignal } = {}): AsyncGenerator<FloydStreamEvent> {
+    const token = await this.token();
     const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
       method: options.method ?? "GET",
       headers: {
-        authorization: `Bearer ${await this.token()}`,
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
         accept: "text/event-stream",
         ...(options.body !== undefined ? { "content-type": "application/json" } : {}),
         ...(options.lastEventId ? { "last-event-id": options.lastEventId } : {}),

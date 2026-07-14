@@ -608,6 +608,7 @@ function remoteRouteScope(method: string | undefined, path: string): ExperienceD
   if (method === "GET" && path === "/api/health") return "health:read";
   if (method === "GET" && path === "/api/state") return "state:read";
   if (method === "GET" && path === "/api/surfaces") return "surface:access";
+  if (method === "GET" && path === "/api/evidence") return "evidence:read";
   if (method === "POST" && path === "/api/experience/negotiate") return "experience:write";
   if (/^\/api\/experience\/[^/]+$/.test(path)) return method === "GET" ? "experience:read" : method === "PATCH" ? "experience:write" : undefined;
   if (method === "GET" && /^\/api\/experience\/[^/]+\/stream$/.test(path)) return "experience:read";
@@ -1310,6 +1311,8 @@ function createGateway(
       }
       if (path === "/api/evidence") {
         const run_id = url.searchParams.get("run_id") ?? undefined;
+        if (remotePrincipal && !run_id) return send(res, 400, { error: "remote evidence requires run_id" });
+        if (run_id) requireRemoteResource(remotePrincipal, "run_ids", run_id);
         return send(res, 200, { events: listEvidence(db, { run_id, limit: 500 }) });
       }
       // ---------- bidirectional session channel (Objective 1) ----------
@@ -1810,7 +1813,10 @@ export function startRemoteSurfaceGateways(
         await verifySurface(surface);
       } catch (error) {
         const status = error instanceof ExperienceSecurityError ? error.httpStatus : 503;
-        return send(res, status, { error: error instanceof ExperienceSecurityError ? error.code : "surface_unavailable", message: String(error) });
+        return send(res, status, {
+          error: error instanceof ExperienceSecurityError ? error.code : "surface_unavailable",
+          message: error instanceof Error ? error.message : String(error),
+        });
       }
 
       const upstreamRequest = requestHttp({

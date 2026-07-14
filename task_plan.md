@@ -377,10 +377,12 @@ and physical/external proof remain separate truth states.
   revoke the resulting device session.
 - [ ] Exercise one real provider OAuth callback/refresh/revoke lifecycle; mock
   provider coverage remains implementation proof, not external-provider proof.
-- [ ] Resolve the current remote boundary: a remote Cockpit restores the Core
-  envelope but cannot yet embed workstation-loopback application copies. Do not
-  claim all platforms are accessible from one another until this is implemented
-  or the product scope is explicitly narrowed by the user.
+- [x] Resolve the remote application boundary with four Core-owned,
+  device-session-authenticated, provenance-gated HTTP/WebSocket relays behind
+  tailnet HTTPS. Live rendered proof opened Desktop, IDE, TerminalOne, Launcher,
+  and an exact project/session/run TUI continuation inside the remote Cockpit;
+  PTY active/resumable counts returned `1/0 -> 0/0`, logout returned 200, and
+  the next authenticated surface request returned 401.
 
 **Status:** in progress. The goal remains open until every unchecked item has a
 receipt or the user explicitly changes the acceptance boundary.

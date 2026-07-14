@@ -914,14 +914,18 @@ function activeSurfaceProject() {
 }
 
 function surfaceLaunchTarget(surface, project, active = app.envelope?.active) {
-  return surface.kind === "command" ? continuationCommand(project, { ...active, last_event_id: app.envelope?.last_event_id }) : safeSurfaceUrl(surface);
+  if (surface.kind === "command") return continuationCommand(project, { ...active, last_event_id: app.envelope?.last_event_id });
+  if (remoteMode && app.surfaceAvailability.get(surface.id)?.verified !== true) return null;
+  return safeSurfaceUrl(surface);
 }
 
 function integratedSurfaceTarget(surface) {
   if (surface.id === "tui") {
     const terminal = FLOYD_SURFACES.find((candidate) => candidate.id === "pty");
+    const active = app.envelope?.active;
+    const remoteContextReady = remoteMode && active?.project_id && active?.session_id && active?.run_id;
     if (!terminal || app.surfaceAvailability.get("pty")?.verified !== true
-      || !surfaceLaunchTarget(surface, activeSurfaceProject())) return null;
+      || !(remoteContextReady || surfaceLaunchTarget(surface, activeSurfaceProject()))) return null;
     const target = new URL(safeSurfaceUrl(terminal));
     target.searchParams.set("floyd", "continue");
     if (remoteMode) target.searchParams.set("floyd_parent", location.origin);
@@ -1007,8 +1011,17 @@ async function openIntegratedSurface(surface) {
   el("surfaceStage").hidden = false;
   el("surfaceStageTitle").textContent = surface.name;
   el("surfaceStageExternal").dataset.target = target;
-  el("surfaceFrame").title = `${surface.name} inside Floyd`;
-  el("surfaceFrame").src = target;
+  const frame = el("surfaceFrame");
+  frame.title = `${surface.name} inside Floyd`;
+  if (remoteMode && surface.id === "tui") {
+    const active = app.envelope.active;
+    const childOrigin = new URL(target).origin;
+    frame.addEventListener("load", () => frame.contentWindow?.postMessage({
+      type: "floyd:continue-context",
+      context: { projectId: active.project_id, sessionId: active.session_id, runId: active.run_id },
+    }, childOrigin), { once: true });
+  }
+  frame.src = target;
   app.integratedSurfaceId = surface.id;
   renderSurfaceTabs(surface.id);
 }
@@ -1063,7 +1076,8 @@ function renderSurfaceHub() {
     const availability = app.surfaceAvailability.get(surface.id);
     const verified = surface.kind === "url" && availability?.verified === true;
     const integrated = surface.id === "tui"
-      ? Boolean(target && app.surfaceAvailability.get("pty")?.verified === true)
+      ? Boolean((target || (remoteMode && active.project_id && active.session_id && active.run_id))
+        && app.surfaceAvailability.get("pty")?.verified === true)
       : verified;
     return `<article class="surface-card" data-surface-id="${escapeHtml(surface.id)}">
       <h3>${escapeHtml(surface.name)}</h3><p>${escapeHtml(surface.detail)}</p>
@@ -1568,7 +1582,8 @@ el("surfaceGrid").addEventListener("click", async (event) => {
   if (!surface) return;
   try {
     const target = surfaceLaunchTarget(surface, activeSurfaceProject());
-    if (!target) throw new Error("Select an active project before opening the TUI continuation.");
+    const remoteTui = remoteMode && surface.id === "tui" && integratedSurfaceTarget(surface);
+    if (!target && !remoteTui) throw new Error("Select an active project before opening the TUI continuation.");
     if (openButton) {
       await enqueueSurfaceNavigation(() => openIntegratedSurface(surface));
     }
@@ -1602,6 +1617,20 @@ if (remoteMode) {
   for (const id of ["newTask", "modelSettings", "shareHandoff", "acceptRun", "rejectRun", "escalateRun"]) el(id).disabled = true;
   el("modeButton").disabled = true;
 }
+async function confirmRemoteDeviceSession() {
+  let lastError;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      await client.request("GET", "/api/health");
+      return;
+    } catch (error) {
+      lastError = error;
+      if (!(error instanceof FloydApiError) || ![401, 403].includes(error.status) || attempt === 3) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 50 * (attempt + 1)));
+    }
+  }
+  throw lastError;
+}
 if (remoteMode && handoffToken) {
   try {
     try { await client.pairExperienceHandoff(handoffToken); }
@@ -1613,6 +1642,7 @@ if (remoteMode && handoffToken) {
       await new Promise((resolve) => setTimeout(resolve, 250));
       await client.pairExperienceHandoff(handoffToken);
     }
+    await confirmRemoteDeviceSession();
   }
   catch (error) { notify(error); }
 }

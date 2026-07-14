@@ -39,6 +39,20 @@ test("browser client calls an unbound fetch implementation safely", async () => 
   assert.deepEqual(await client.health(), receiver);
 });
 
+test("browser client omits an empty bearer header so HttpOnly device cookies remain authoritative", async () => {
+  let seen;
+  const client = new FloydBrowserClient({
+    baseUrl: "https://floyd.test",
+    token: () => "",
+    fetch: async (input, init) => {
+      seen = input instanceof Request ? input : new Request(input, init);
+      return Response.json({ ok: true });
+    },
+  });
+  assert.deepEqual(await client.health(), { ok: true });
+  assert.equal(seen.headers.has("authorization"), false);
+});
+
 test("browser model stream rejects EOF without an explicit terminal event", async () => {
   const client = new FloydBrowserClient({
     token: "browser-token",

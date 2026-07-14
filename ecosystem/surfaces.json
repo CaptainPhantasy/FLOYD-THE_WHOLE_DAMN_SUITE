@@ -129,7 +129,7 @@
       "integration": {
         "status": "verified_component_branch",
         "branch": "feat/floyd-core-runtime",
-        "commit": "e4f192fcaa3c26ed19d65dd3f2edef3acc0bbc36",
+        "commit": "91ebc395c2276f747c6ba42fb7838bb161be0f2a",
         "remote_ref": "origin/feat/floyd-core-runtime",
         "contract": "vendored @floyd/sdk -> loopback Floyd Core health bridge + canonical CLI PTY -> managed OpenCode SDK",
         "production_audit_vulnerabilities": 0,
