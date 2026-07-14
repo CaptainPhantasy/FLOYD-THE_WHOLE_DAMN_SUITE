@@ -9,6 +9,8 @@ export const REPO_ROOT = join(HERE, "..", "..", "..");
 export const RUNTIME_ROOT = process.env.FLOYD_RUNTIME_ROOT ?? "/Volumes/Storage/FLOYD_RUNTIME";
 
 export const CORE_PORT = Number(process.env.FLOYD_CORE_PORT ?? 41414);
+export const REMOTE_CORE_PORT = Number(process.env.FLOYD_REMOTE_CORE_PORT ?? 41416);
+export const REMOTE_PUBLIC_ORIGIN = process.env.FLOYD_REMOTE_ORIGIN ?? "https://douglass-mac-mini.tail58d565.ts.net:8443";
 export const ENGINE_PORT = Number(process.env.FLOYD_ENGINE_PORT ?? 41415);
 export const LOOPBACK = "127.0.0.1";
 

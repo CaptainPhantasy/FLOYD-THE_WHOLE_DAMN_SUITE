@@ -5,6 +5,7 @@ import {
   type ExperienceEnvelope,
   type ExperienceEnvelopePatch,
   type ExperienceDeviceEnrollment,
+  type ExperienceDeviceSessionScope,
   type AuthenticatedExperienceDevice,
   type ExperienceHandoffConsumption,
   type ExperienceHandoffIssue,
@@ -239,6 +240,19 @@ export class FloydClient {
     }, signal);
   }
 
+  enrollExperienceDeviceWithScopes(
+    metadata: Record<string, unknown>,
+    allowedScopes: ExperienceDeviceSessionScope[],
+    deviceId?: string,
+    signal?: AbortSignal,
+  ): Promise<ExperienceDeviceEnrollment> {
+    return this.request("POST", "/api/devices/enroll", {
+      metadata,
+      allowed_scopes: allowedScopes,
+      ...(deviceId ? { device_id: deviceId } : {}),
+    }, signal);
+  }
+
   authenticateExperienceDevice(
     deviceId: string,
     secret: string,
@@ -251,8 +265,12 @@ export class FloydClient {
     return this.request("DELETE", `/api/devices/${encodeURIComponent(deviceId)}`, undefined, signal);
   }
 
+  revokeCurrentDeviceSession(signal?: AbortSignal): Promise<{ session_id: string; revoked: true }> {
+    return this.request("DELETE", "/api/device-sessions/current", undefined, signal);
+  }
+
   issueExperienceHandoff(
-    input: { envelope_id?: string; envelope_revision?: number; created_by_device_id?: string; ttl_ms?: number } = {},
+    input: { envelope_id?: string; envelope_revision?: number; created_by_device_id?: string; ttl_ms?: number; scopes?: ExperienceDeviceSessionScope[] } = {},
     signal?: AbortSignal,
   ): Promise<ExperienceHandoffIssue> {
     return this.request("POST", "/api/handoffs", input, signal);

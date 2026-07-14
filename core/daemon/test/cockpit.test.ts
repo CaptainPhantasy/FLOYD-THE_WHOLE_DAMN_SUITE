@@ -24,6 +24,14 @@ test("cockpit has inline question and permission controls with no emoji glyphs",
   assert.doesNotMatch(html, /[⚙🔐😀-🙏🌀-🫿]/u);
 });
 
+test("remote cockpit is continuation-only and disables local authority controls", () => {
+  assert.match(html, /const remoteMode =/);
+  assert.match(html, /Remote continuation cannot create a new run/);
+  assert.match(html, /Run decisions require the local authority surface/);
+  assert.match(html, /Private remote continuation/);
+  assert.match(html, /\["newTask", "modelSettings", "acceptRun", "rejectRun", "escalateRun"\]/);
+});
+
 test("cockpit exposes user-driven model routing without persisting provider keys", () => {
   assert.match(html, /id="modelSettings"/);
   assert.match(html, /opencode-go/);

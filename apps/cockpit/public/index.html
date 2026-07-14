@@ -173,13 +173,14 @@
     <div id="inspectorBody"><div class="inspect-section"><div class="inspect-label">Runtime boundary</div><div class="inspect-row"><span>Surface</span><code>@floyd/sdk</code></div><div class="inspect-row"><span>Authority</span><code>Floyd Core</code></div><div class="inspect-row"><span>Engine</span><code>OpenCode SDK</code></div></div></div>
   </aside>
 </div>
-<footer class="bottom-bar"><span>Loopback-only Core</span><span id="routeLabel">Route: awaiting health</span><span class="right" id="clock"></span></footer>
+<footer class="bottom-bar"><span id="boundaryLabel">Loopback-only Core</span><span id="routeLabel">Route: awaiting health</span><span class="right" id="clock"></span></footer>
 <div class="toast" id="toast" role="alert"></div>
 
 <script type="module">
 import { FloydBrowserClient, FloydApiError } from "/floyd-sdk.js";
 
 const query = new URLSearchParams(location.search);
+const remoteMode = !["localhost", "127.0.0.1", "::1", ""].includes(location.hostname);
 const bootstrap = new URLSearchParams(location.hash.replace(/^#/, ""));
 const bootstrapToken = bootstrap.get("token");
 if (bootstrapToken) {
@@ -756,6 +757,7 @@ async function sendPrompt() {
 }
 
 function startNewTask({ publish = true } = {}) {
+  if (remoteMode) { notify(new Error("Remote continuation cannot create a new run.")); return; }
   app.streamAbort?.abort();
   clearPendingCursorSave();
   const selectionGeneration = ++app.runSelectionGeneration;
@@ -781,6 +783,7 @@ function startNewTask({ publish = true } = {}) {
 }
 
 async function decide(action) {
+  if (remoteMode) { notify(new Error("Run decisions require the local authority surface.")); return; }
   if (!app.currentRunId) return;
   try {
     await client.decide(app.currentRunId, action, actor);
@@ -827,8 +830,9 @@ el("inspectorBody").addEventListener("click", async (event) => {
   } catch (error) { notify(error); }
 });
 el("newTask").addEventListener("click", startNewTask);
-el("modelSettings").addEventListener("click", renderModelSettings);
+el("modelSettings").addEventListener("click", () => remoteMode ? notify(new Error("Provider settings require the local authority surface.")) : renderModelSettings());
 el("modeButton").addEventListener("click", () => {
+  if (remoteMode) return;
   if (app.mode === "model") { startNewTask(); return; }
   if (!app.currentRunId) return;
   app.mode = app.mode === "new" ? "steer" : "new";
@@ -846,6 +850,11 @@ el("escalateRun").addEventListener("click", () => decide("escalate"));
 setInterval(() => { el("clock").textContent = new Date().toLocaleTimeString(); }, 1000);
 setInterval(refreshHealth, 5000);
 app.refreshTimer = setInterval(() => refreshState(), 3500);
+if (remoteMode) {
+  el("boundaryLabel").textContent = "Private remote continuation";
+  for (const id of ["newTask", "modelSettings", "acceptRun", "rejectRun", "escalateRun"]) el(id).disabled = true;
+  el("modeButton").disabled = true;
+}
 await refreshHealth();
 await refreshState();
 try { await initializeExperience(); } catch (error) { if (token()) notify(error); }

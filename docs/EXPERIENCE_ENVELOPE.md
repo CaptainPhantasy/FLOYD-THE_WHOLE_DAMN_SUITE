@@ -41,6 +41,7 @@ artifacts must belong to the active run.
 - `GET /api/experience/{id}/stream`
 - `POST /api/devices/enroll`
 - `POST /api/devices/authenticate`
+- `DELETE /api/device-sessions/current`
 - `DELETE /api/devices/{id}`
 - `POST /api/handoffs`
 - `POST /api/handoffs/consume`
@@ -69,17 +70,32 @@ secrets are hashed at rest, revision-bound, consume-once, and revocable. Deep
 links contain a bearer handoff secret, so surfaces must never log them or leave
 them in history.
 
-The current HTTP listener remains loopback-only and authenticated by the Core
-token. This is not remote attach. Remote use still requires private HTTPS,
-device-scoped session tokens, rate limits, and a proved revoked-device denial.
-A handoff token is not a provider key and must never grant unrestricted
-workstation access.
+The admin HTTP listener remains loopback-only on port 41414 and authenticated
+by the Core token. A separate loopback listener on port 41416 is the remote
+boundary; the live host publishes only that boundary through Tailscale HTTPS
+on port 8443. The remote listener rejects the Core token and provider relay,
+accepts only short-lived device sessions, and applies an explicit route,
+capability, and resource allowlist. Tailscale is transport defense in depth,
+not application identity. Funnel/public exposure remains prohibited.
+
+Permanent device credentials exchange for a default health-only session.
+Consuming a handoff atomically issues a session whose scopes are the
+intersection of the device grant and handoff grant and whose resources are
+bound to the envelope's active project, session, run, and current artifacts.
+Remote session attach/input requires an explicit bound run. Server-derived
+device attribution replaces any untrusted actor field. Revocation closes open
+SSE streams immediately; token expiry has its own stream termination timer.
 
 Handoff consumption is self-authenticating but requires all three factors in
 one request: the one-time handoff token, an enrolled device ID, and that
-device's enrollment secret. Core rate-limits this path and rejects non-loopback
-browser origins. A token bound to an older envelope revision is rejected
+device's enrollment secret. Core rate-limits this path and accepts only
+loopback or the exact private HTTPS origin. A token bound to an older envelope revision is rejected
 without being consumed.
+
+Sharp edges remain: the current revision binding makes handoffs brittle during
+active envelope edits; a browser still needs an HttpOnly same-site session or
+native secure-storage bridge; and the private HTTPS lifecycle has been proved
+from the host through its tailnet name, not yet from a second physical device.
 
 ## Completion boundary
 

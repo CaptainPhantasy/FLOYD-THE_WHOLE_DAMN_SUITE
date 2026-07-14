@@ -262,10 +262,46 @@ export interface ExperienceDeviceEnrollment {
   key_id: string;
 }
 
+export const FLOYD_DEVICE_SESSION_SCOPES = [
+  "health:read",
+  "state:read",
+  "experience:read",
+  "experience:write",
+  "session:read",
+  "session:steer",
+  "session:answer",
+  "session:permission",
+  "run:read",
+  "artifact:read",
+  "evidence:read",
+] as const;
+
+export type ExperienceDeviceSessionScope = typeof FLOYD_DEVICE_SESSION_SCOPES[number];
+
+export interface ExperienceDeviceSessionResources {
+  envelope_ids: string[];
+  project_ids: string[];
+  session_ids: string[];
+  run_ids: string[];
+  artifact_ids: string[];
+}
+
+export interface ExperienceDeviceSession {
+  session_id: string;
+  device_id: string;
+  /** Returned exactly once. Store as a short-lived platform credential. */
+  token: string;
+  scopes: ExperienceDeviceSessionScope[];
+  resources: ExperienceDeviceSessionResources;
+  created_at: string;
+  expires_at: string;
+}
+
 export interface AuthenticatedExperienceDevice {
   device_id: string;
   metadata: Record<string, unknown>;
   authenticated_at: string;
+  session: ExperienceDeviceSession;
 }
 
 export interface ExperienceHandoffIssue {
@@ -291,6 +327,7 @@ export interface ExperienceHandoffConsumption {
   created_by_device_id: string | null;
   consumed_at: string;
   envelope: ExperienceEnvelope;
+  session: ExperienceDeviceSession;
 }
 
 // ---------- permission gating ----------

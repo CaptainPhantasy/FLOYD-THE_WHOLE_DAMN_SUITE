@@ -171,23 +171,30 @@ test("typed experience watch resumes, parses SSE, and cancels its reader", async
 test("typed and browser clients expose the same device and handoff lifecycle", async () => {
   async function exercise(client: FloydClient | InstanceType<typeof FloydBrowserClient>, seen: Request[]) {
     await client.enrollExperienceDevice({ platform: "macos" }, "device/one");
+    await client.enrollExperienceDeviceWithScopes({ platform: "ios" }, ["health:read"], "device/two");
     await client.authenticateExperienceDevice("device/one", "secret-value");
     await client.issueExperienceHandoff({ envelope_id: "primary", envelope_revision: 8, ttl_ms: 30_000 });
     await client.consumeExperienceHandoff("hnd_token", "device/one", "device-secret");
+    await client.revokeCurrentDeviceSession();
     await client.revokeExperienceHandoff("handoff/one");
     await client.revokeExperienceDevice("device/one");
 
     assert.deepEqual(seen.map((request) => [request.method, new URL(request.url).pathname]), [
       ["POST", "/api/devices/enroll"],
+      ["POST", "/api/devices/enroll"],
       ["POST", "/api/devices/authenticate"],
       ["POST", "/api/handoffs"],
       ["POST", "/api/handoffs/consume"],
+      ["DELETE", "/api/device-sessions/current"],
       ["DELETE", "/api/handoffs/handoff%2Fone"],
       ["DELETE", "/api/devices/device%2Fone"],
     ]);
     assert.deepEqual(JSON.parse(await seen[0]!.clone().text()), { metadata: { platform: "macos" }, device_id: "device/one" });
-    assert.deepEqual(JSON.parse(await seen[1]!.clone().text()), { device_id: "device/one", secret: "secret-value" });
-    assert.deepEqual(JSON.parse(await seen[3]!.clone().text()), {
+    assert.deepEqual(JSON.parse(await seen[1]!.clone().text()), {
+      metadata: { platform: "ios" }, allowed_scopes: ["health:read"], device_id: "device/two",
+    });
+    assert.deepEqual(JSON.parse(await seen[2]!.clone().text()), { device_id: "device/one", secret: "secret-value" });
+    assert.deepEqual(JSON.parse(await seen[4]!.clone().text()), {
       token: "hnd_token",
       device_id: "device/one",
       device_secret: "device-secret",

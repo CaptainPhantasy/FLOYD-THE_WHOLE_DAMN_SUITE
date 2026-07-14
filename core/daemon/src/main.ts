@@ -1,10 +1,10 @@
-import { verifyRuntimeRoot, nowIso, CORE_PORT, LOOPBACK, PATHS } from "./config.ts";
+import { verifyRuntimeRoot, nowIso, CORE_PORT, LOOPBACK, PATHS, REMOTE_CORE_PORT } from "./config.ts";
 import { openDb } from "./db.ts";
 import { OpenCodeEngine } from "./engine.ts";
 import { appendEvidence } from "./evidence.ts";
 import { seed } from "./seed.ts";
 import { recoverInterrupted } from "./runs.ts";
-import { startGateway, startLiveChannel } from "./http.ts";
+import { startGateway, startLiveChannel, startRemoteGateway } from "./http.ts";
 
 async function main(): Promise<void> {
   const startedAt = nowIso();
@@ -36,14 +36,18 @@ async function main(): Promise<void> {
         : "broker zai credential failed validation (HTTP 401, 2026-07-12); using validated user opencode config key for the same GLM Coding Plan — refresh the broker credential",
   });
 
-  startGateway(db, engine, process.pid, startedAt);
+  const localGateway = startGateway(db, engine, process.pid, startedAt);
+  const remoteGateway = startRemoteGateway(db, engine, process.pid, startedAt);
   const live = startLiveChannel(db, engine);
   appendEvidence(db, "core.gateway_listening", "floyd-core", { url: `http://${LOOPBACK}:${CORE_PORT}`, live_channel: true });
-  console.log(`[floyd-core] up pid=${process.pid} gateway=http://${LOOPBACK}:${CORE_PORT} engine=${engine.baseUrl} (opencode ${version} pid=${pid})`);
+  appendEvidence(db, "core.remote_gateway_listening", "floyd-core", { url: `http://${LOOPBACK}:${REMOTE_CORE_PORT}`, device_sessions: true });
+  console.log(`[floyd-core] up pid=${process.pid} gateway=http://${LOOPBACK}:${CORE_PORT} remote=http://${LOOPBACK}:${REMOTE_CORE_PORT} engine=${engine.baseUrl} (opencode ${version} pid=${pid})`);
 
   const shutdown = async (sig: string) => {
     appendEvidence(db, "core.shutdown", "floyd-core", { signal: sig });
     live.stop();
+    localGateway.close();
+    remoteGateway.close();
     await engine.stop();
     process.exit(0);
   };

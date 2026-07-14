@@ -113,12 +113,24 @@ export class FloydBrowserClient {
     }, signal);
   }
 
+  enrollExperienceDeviceWithScopes(metadata, allowedScopes, deviceId, signal) {
+    return this.request("POST", "/api/devices/enroll", {
+      metadata,
+      allowed_scopes: allowedScopes,
+      ...(deviceId ? { device_id: deviceId } : {}),
+    }, signal);
+  }
+
   authenticateExperienceDevice(deviceId, secret, signal) {
     return this.request("POST", "/api/devices/authenticate", { device_id: deviceId, secret }, signal);
   }
 
   revokeExperienceDevice(deviceId, signal) {
     return this.request("DELETE", `/api/devices/${encodeURIComponent(deviceId)}`, undefined, signal);
+  }
+
+  revokeCurrentDeviceSession(signal) {
+    return this.request("DELETE", "/api/device-sessions/current", undefined, signal);
   }
 
   issueExperienceHandoff(input = {}, signal) {

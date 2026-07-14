@@ -5,7 +5,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Db } from "./db.ts";
 import type { OpenCodeEngine } from "./engine.ts";
-import { CORE_PORT, LOOPBACK, gatewayToken, nowIso, newId } from "./config.ts";
+import { CORE_PORT, LOOPBACK, REMOTE_CORE_PORT, REMOTE_PUBLIC_ORIGIN, gatewayToken, nowIso, newId } from "./config.ts";
 import { PATHS } from "./config.ts";
 import { appendEvidence, listEvidence } from "./evidence.ts";
 import { createRun, executeRun, decideRun, getRunDetail, readRunArtifact } from "./runs.ts";
@@ -23,7 +23,13 @@ import {
   updateExperience,
 } from "./experience.ts";
 import { ExperienceSecurityError, ExperienceSecurityService } from "./experience-security.ts";
-import type { ExperienceEnvelope, ExperienceEnvelopePatch, ExperienceNegotiationRequest } from "@floyd/contracts";
+import type {
+  ExperienceDeviceSessionResources,
+  ExperienceDeviceSessionScope,
+  ExperienceEnvelope,
+  ExperienceEnvelopePatch,
+  ExperienceNegotiationRequest,
+} from "@floyd/contracts";
 
 const COCKPIT_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "apps", "cockpit", "public");
 const BROWSER_SDK = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "packages", "sdk", "browser", "floyd-sdk.js");
@@ -31,12 +37,61 @@ const BROWSER_SDK = join(dirname(fileURLToPath(import.meta.url)), "..", "..", ".
 type SseClient = { res: ServerResponse; run_id?: string };
 const sseClients = new Set<SseClient>();
 
-type ExperienceSseClient = { res: ServerResponse; envelope_id: string };
+type ExperienceSseClient = { res: ServerResponse; envelope_id: string; principal: RemotePrincipal | null };
 const experienceClients = new Set<ExperienceSseClient>();
+type RemotePrincipal = ReturnType<ExperienceSecurityService["authenticateDeviceSession"]>;
+const remoteStreams = new Map<string, Set<ServerResponse>>();
 
-function writeExperienceEvent(res: ServerResponse, envelope: ExperienceEnvelope): boolean {
+function registerRemoteStream(res: ServerResponse, principal: RemotePrincipal): void {
+  const current = remoteStreams.get(principal.sessionId) ?? new Set<ServerResponse>();
+  current.add(res);
+  remoteStreams.set(principal.sessionId, current);
+  const delay = Math.max(1, Date.parse(principal.expiresAt) - Date.now());
+  const expiry = setTimeout(() => res.destroy(new Error("device session expired")), delay);
+  expiry.unref();
+  res.on("close", () => {
+    clearTimeout(expiry);
+    current.delete(res);
+    if (current.size === 0) remoteStreams.delete(principal.sessionId);
+  });
+}
+
+function ensureRemoteStreamCapacity(principal: RemotePrincipal | null): void {
+  if (principal && (remoteStreams.get(principal.sessionId)?.size ?? 0) >= 8) {
+    throw new ExperienceSecurityError("scope_denied", "device session remote stream limit exceeded", 429);
+  }
+}
+
+function closeRemoteStreams(sessionIds: readonly string[]): void {
+  for (const sessionId of sessionIds) {
+    for (const response of remoteStreams.get(sessionId) ?? []) response.destroy(new Error("device session revoked"));
+    remoteStreams.delete(sessionId);
+  }
+}
+
+function sanitizeRemoteEnvelope(envelope: ExperienceEnvelope): Record<string, unknown> {
+  const { credential_ref: _credentialRef, ...modelRoute } = envelope.model_route;
+  return { ...envelope, model_route: modelRoute };
+}
+
+function requireRemoteEnvelopeContext(principal: RemotePrincipal | null, envelope: ExperienceEnvelope): void {
+  if (!principal) return;
+  for (const [field, kind] of [
+    ["project_id", "project_ids"],
+    ["session_id", "session_ids"],
+    ["run_id", "run_ids"],
+  ] as const) {
+    const current = envelope.active[field];
+    const allowed = principal.resources[kind];
+    if ((current === null && allowed.length !== 0) || (current !== null && !allowed.includes(current))) {
+      throw new ExperienceSecurityError("scope_denied", "experience context moved outside the device session grant", 403);
+    }
+  }
+}
+
+function writeExperienceEvent(res: ServerResponse, envelope: ExperienceEnvelope, remote = false): boolean {
   try {
-    const writable = res.write(`id: ${envelope.revision}\nevent: experience\ndata: ${JSON.stringify(envelope)}\n\n`);
+    const writable = res.write(`id: ${envelope.revision}\nevent: experience\ndata: ${JSON.stringify(remote ? sanitizeRemoteEnvelope(envelope) : envelope)}\n\n`);
     if (!writable) res.destroy(new Error("experience stream backpressure limit reached"));
     return writable;
   } catch {
@@ -47,7 +102,14 @@ function writeExperienceEvent(res: ServerResponse, envelope: ExperienceEnvelope)
 function broadcastExperience(envelope: ExperienceEnvelope): void {
   for (const client of experienceClients) {
     if (client.envelope_id !== envelope.id) continue;
-    if (!writeExperienceEvent(client.res, envelope)) experienceClients.delete(client);
+    try {
+      requireRemoteEnvelopeContext(client.principal, envelope);
+    } catch {
+      client.res.destroy(new Error("experience context moved outside the device session grant"));
+      experienceClients.delete(client);
+      continue;
+    }
+    if (!writeExperienceEvent(client.res, envelope, Boolean(client.principal))) experienceClients.delete(client);
   }
 }
 
@@ -249,7 +311,13 @@ export function startLiveChannel(db: Db, engine: OpenCodeEngine): { stop: () => 
 
 async function readBody(req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
-  for await (const ch of req) chunks.push(ch as Buffer);
+  let bytes = 0;
+  for await (const ch of req) {
+    const chunk = ch as Buffer;
+    bytes += chunk.length;
+    if (bytes > 1024 * 1024) throw new RequestBodyTooLargeError();
+    chunks.push(chunk);
+  }
   const raw = Buffer.concat(chunks).toString("utf8");
   if (!raw) return {};
   try {
@@ -263,23 +331,114 @@ class RequestJsonError extends Error {
   constructor() { super("request body is not valid JSON"); }
 }
 
+class RequestBodyTooLargeError extends Error {
+  constructor() { super("request body exceeds 1048576 bytes"); }
+}
+
 function send(res: ServerResponse, code: number, body: unknown, mime = "application/json"): void {
   const out = mime === "application/json" ? JSON.stringify(body, null, 2) : String(body);
   res.writeHead(code, { "content-type": mime });
   res.end(out);
 }
 
-export function startGateway(db: Db, engine: OpenCodeEngine, corePid: number, startedAt: string): ReturnType<typeof createServer> {
+function remoteRouteScope(method: string | undefined, path: string): ExperienceDeviceSessionScope | null | undefined {
+  if (method === "GET" && path === "/api/health") return "health:read";
+  if (method === "GET" && path === "/api/state") return "state:read";
+  if (method === "POST" && path === "/api/experience/negotiate") return "experience:write";
+  if (/^\/api\/experience\/[^/]+$/.test(path)) return method === "GET" ? "experience:read" : method === "PATCH" ? "experience:write" : undefined;
+  if (method === "GET" && /^\/api\/experience\/[^/]+\/stream$/.test(path)) return "experience:read";
+  if (/^\/api\/sessions\/[^/]+\/(events|attach)$/.test(path)) return "session:read";
+  if (method === "POST" && /^\/api\/sessions\/[^/]+\/steer$/.test(path)) return null;
+  if (method === "GET" && /^\/api\/runs\/[^/]+\/artifact\/[^/]+$/.test(path)) return "artifact:read";
+  if (method === "GET" && /^\/api\/runs\/[^/]+(?:\/stream)?$/.test(path)) return "run:read";
+  if (method === "GET" && /^\/api\/artifacts\/[0-9a-f]{64}$/.test(path)) return "artifact:read";
+  if (method === "DELETE" && path === "/api/device-sessions/current") return null;
+  return undefined;
+}
+
+function requireRemoteResource(
+  principal: RemotePrincipal | null,
+  kind: keyof ExperienceDeviceSessionResources,
+  id: string,
+): void {
+  if (principal && !principal.resources[kind].includes(id)) {
+    throw new ExperienceSecurityError("scope_denied", `device session is not authorized for ${kind}`, 403);
+  }
+}
+
+function requireRemoteScope(principal: RemotePrincipal | null, scope: ExperienceDeviceSessionScope): void {
+  if (principal && !principal.scopes.includes(scope)) {
+    throw new ExperienceSecurityError("scope_denied", `device session lacks ${scope}`, 403);
+  }
+}
+
+function validateRemoteExperiencePatch(
+  rawPatch: Record<string, unknown>,
+  principal: RemotePrincipal | null,
+  currentEnvelope: ExperienceEnvelope,
+): void {
+  if (!principal) return;
+  if ("model_route" in rawPatch) {
+    throw new ExperienceSecurityError("scope_denied", "remote sessions cannot change model routing", 403);
+  }
+  if (rawPatch.selected_artifact_id !== undefined && rawPatch.selected_artifact_id !== null) {
+    requireRemoteResource(principal, "artifact_ids", String(rawPatch.selected_artifact_id));
+  }
+  if (rawPatch.active !== undefined) {
+    if (rawPatch.active === null || typeof rawPatch.active !== "object" || Array.isArray(rawPatch.active)) {
+      throw new ExperienceSecurityError("invalid_input", "active context must be an object", 400);
+    }
+    const active = rawPatch.active as Record<string, unknown>;
+    for (const [field, kind] of [
+      ["project_id", "project_ids"],
+      ["session_id", "session_ids"],
+      ["run_id", "run_ids"],
+    ] as const) {
+      const value = active[field];
+      if (value !== undefined && value !== null) requireRemoteResource(principal, kind, String(value));
+    }
+    requireRemoteEnvelopeContext(principal, {
+      ...currentEnvelope,
+      active: { ...currentEnvelope.active, ...active },
+    } as ExperienceEnvelope);
+  }
+}
+
+function deviceSessionResponse(session: ReturnType<ExperienceSecurityService["issueDeviceSession"]>): Record<string, unknown> {
+  return {
+    session_id: session.sessionId,
+    device_id: session.deviceId,
+    token: session.token,
+    scopes: session.scopes,
+    resources: session.resources,
+    created_at: session.createdAt,
+    expires_at: session.expiresAt,
+  };
+}
+
+function createGateway(
+  db: Db,
+  engine: OpenCodeEngine,
+  corePid: number,
+  startedAt: string,
+  boundary: "local" | "remote",
+): ReturnType<typeof createServer> {
   const token = gatewayToken();
   const selfAuthAttempts = new Map<string, { windowStarted: number; count: number }>();
   const experienceSecurity = new ExperienceSecurityService(db, {
     masterKeyPath: PATHS.experienceMasterKey,
     evidence: (event) => appendEvidence(db, event.type, event.actor, event.payload),
+    sessionInvalidated: closeRemoteStreams,
   });
 
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", `http://${LOOPBACK}:${CORE_PORT}`);
     const path = url.pathname;
+    if (boundary === "remote") {
+      res.setHeader("referrer-policy", "no-referrer");
+      res.setHeader("x-content-type-options", "nosniff");
+      res.setHeader("x-frame-options", "DENY");
+    }
 
     // /gateway reserves Authorization and x-api-key for the upstream provider,
     // so local Core authentication uses a distinct header on that route.
@@ -315,14 +474,20 @@ export function startGateway(db: Db, engine: OpenCodeEngine, corePid: number, st
       if (req.headers.origin) {
         try {
           const origin = new URL(req.headers.origin);
-          if (!["localhost", "127.0.0.1", "::1"].includes(origin.hostname)) {
-            return send(res, 403, { error: "self-authentication permits loopback origins only" });
-          }
+          const loopbackOrigin = ["localhost", "127.0.0.1", "::1"].includes(origin.hostname);
+          const exactRemoteOrigin = boundary === "remote" && origin.origin === REMOTE_PUBLIC_ORIGIN;
+          if (!loopbackOrigin && !exactRemoteOrigin) return send(res, 403, { error: "self-authentication origin is not allowed" });
         } catch {
           return send(res, 403, { error: "self-authentication origin is invalid" });
         }
       }
       const now = Date.now();
+      if (selfAuthAttempts.size > 1024) {
+        for (const [attemptKey, value] of selfAuthAttempts) {
+          if (now - value.windowStarted >= 60_000) selfAuthAttempts.delete(attemptKey);
+        }
+        if (selfAuthAttempts.size > 1024) return send(res, 503, { error: "self-authentication limiter capacity exceeded" });
+      }
       const key = `${req.socket.remoteAddress ?? "unknown"}:${path}`;
       const prior = selfAuthAttempts.get(key);
       const attempt = !prior || now - prior.windowStarted >= 60_000
@@ -332,8 +497,23 @@ export function startGateway(db: Db, engine: OpenCodeEngine, corePid: number, st
       const limit = path === "/api/devices/authenticate" ? 8 : 30;
       if (attempt.count > limit) return send(res, 429, { error: "self-authentication rate limit exceeded" });
     }
-    if (!isStatic && !selfAuthenticating && auth !== token) {
-      return send(res, 401, { error: "unauthorized: missing/invalid gateway token" });
+    let remotePrincipal: RemotePrincipal | null = null;
+    if (boundary === "local") {
+      if (!isStatic && !selfAuthenticating && auth !== token) {
+        return send(res, 401, { error: "unauthorized: missing/invalid gateway token" });
+      }
+    } else if (!isStatic && !selfAuthenticating) {
+      if (isProviderGateway || gatewayAuth || !auth || auth === token) {
+        return send(res, 401, { error: "remote boundary requires a device session" });
+      }
+      const requiredScope = remoteRouteScope(req.method, path);
+      if (requiredScope === undefined) return send(res, 403, { error: "route is not exposed on the remote boundary" });
+      try {
+        remotePrincipal = experienceSecurity.authenticateDeviceSession(auth, requiredScope ?? undefined);
+      } catch (error) {
+        if (error instanceof ExperienceSecurityError) return send(res, error.httpStatus, { error: error.code, message: error.message });
+        return send(res, 500, { error: "device session authentication failed" });
+      }
     }
 
     try {
@@ -344,6 +524,15 @@ export function startGateway(db: Db, engine: OpenCodeEngine, corePid: number, st
       }
       // ---------- API ----------
       if (path === "/api/health") {
+        if (boundary === "remote") {
+          return send(res, 200, {
+            ok: true,
+            service: "floyd-core",
+            version: "0.1.0",
+            now: nowIso(),
+            engine: { ok: await engine.isHealthy() },
+          });
+        }
         return send(res, 200, {
           ok: true,
           service: "floyd-core",
@@ -355,6 +544,24 @@ export function startGateway(db: Db, engine: OpenCodeEngine, corePid: number, st
         });
       }
       if (path === "/api/state") {
+        if (boundary === "remote") {
+          const resources = remotePrincipal!.resources;
+          const stateEnvelope = resources.envelope_ids.length ? getExperience(db, resources.envelope_ids[0]) : null;
+          if (stateEnvelope) requireRemoteEnvelopeContext(remotePrincipal, stateEnvelope);
+          const inList = (values: string[]) => values.length ? values : ["__none__"];
+          const projectMarks = inList(resources.project_ids).map(() => "?").join(",");
+          const sessionMarks = inList(resources.session_ids).map(() => "?").join(",");
+          const runMarks = inList(resources.run_ids).map(() => "?").join(",");
+          return send(res, 200, {
+            projects: db.prepare(`SELECT id, name FROM projects WHERE id IN (${projectMarks})`).all(...inList(resources.project_ids)),
+            sessions: db.prepare(`SELECT id, project_id, title, created_at FROM sessions WHERE id IN (${sessionMarks})`).all(...inList(resources.session_ids)),
+            runs: db.prepare(`SELECT id, session_id, project_id, goal, status, created_at, updated_at FROM runs WHERE id IN (${runMarks})`).all(...inList(resources.run_ids)),
+            jobs: db.prepare(`SELECT id, run_id, kind, status, created_at, updated_at FROM jobs WHERE run_id IN (${runMarks})`).all(...inList(resources.run_ids)),
+            leases: [],
+            provider_profiles: db.prepare(`SELECT id, vendor, billing_class, plan_name, region, approved FROM provider_profiles WHERE approved = 1`).all(),
+            experience: stateEnvelope ? sanitizeRemoteEnvelope(stateEnvelope) : null,
+          });
+        }
         return send(res, 200, {
           projects: db.prepare(`SELECT * FROM projects`).all(),
           sessions: db.prepare(`SELECT * FROM sessions`).all(),
@@ -372,6 +579,7 @@ export function startGateway(db: Db, engine: OpenCodeEngine, corePid: number, st
           return send(res, 400, { error: "device attribution requires a device-scoped session credential" });
         }
         const envelopeId = body.envelope_id ?? "primary";
+        requireRemoteResource(remotePrincipal, "envelope_ids", envelopeId);
         const request: ExperienceNegotiationRequest = {
           surface_id: body.surface_id,
           sdk_version: body.sdk_version,
@@ -379,13 +587,15 @@ export function startGateway(db: Db, engine: OpenCodeEngine, corePid: number, st
           capabilities: body.capabilities,
         };
         let current = getExperience(db, envelopeId);
+        requireRemoteEnvelopeContext(remotePrincipal, current);
         let result;
         try {
-          result = registerSurface(db, envelopeId, { ...request, expected_revision: current.revision, device_id: body.device_id ?? null });
+          result = registerSurface(db, envelopeId, { ...request, expected_revision: current.revision, device_id: remotePrincipal?.deviceId ?? null });
         } catch (error) {
           if (!(error instanceof ExperienceConflictError)) throw error;
           current = getExperience(db, envelopeId);
-          result = registerSurface(db, envelopeId, { ...request, expected_revision: current.revision, device_id: body.device_id ?? null });
+          requireRemoteEnvelopeContext(remotePrincipal, current);
+          result = registerSurface(db, envelopeId, { ...request, expected_revision: current.revision, device_id: remotePrincipal?.deviceId ?? null });
         }
         if (!result.negotiation.accepted) {
           return send(res, 426, { error: "sdk_upgrade_required", ...result.negotiation });
@@ -396,21 +606,27 @@ export function startGateway(db: Db, engine: OpenCodeEngine, corePid: number, st
       const experienceMatch = path.match(/^\/api\/experience\/([^/]+)(?:\/(stream))?$/);
       if (experienceMatch) {
         const envelopeId = decodeURIComponent(experienceMatch[1] ?? "");
+        requireRemoteResource(remotePrincipal, "envelope_ids", envelopeId);
+        const authorizedEnvelope = getExperience(db, envelopeId);
+        requireRemoteEnvelopeContext(remotePrincipal, authorizedEnvelope);
         if (experienceMatch[2] === "stream") {
           if (req.method !== "GET") return send(res, 405, { error: "experience stream is GET" });
-          const envelope = getExperience(db, envelopeId);
+          const envelope = authorizedEnvelope;
           const lastRaw = req.headers["last-event-id"] ?? url.searchParams.get("lastEventId");
           const lastRevision = Number(Array.isArray(lastRaw) ? lastRaw[0] : lastRaw) || 0;
+          ensureRemoteStreamCapacity(remotePrincipal);
           res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
+          if (remotePrincipal) registerRemoteStream(res, remotePrincipal);
           res.write(`event: hello\ndata: ${JSON.stringify({ envelope_id: envelopeId, revision: envelope.revision })}\n\n`);
-          if (lastRevision < envelope.revision && !writeExperienceEvent(res, envelope)) return;
-          const client = { res, envelope_id: envelopeId };
+          if (lastRevision < envelope.revision && !writeExperienceEvent(res, envelope, Boolean(remotePrincipal))) return;
+          const client = { res, envelope_id: envelopeId, principal: remotePrincipal };
           experienceClients.add(client);
           res.on("close", () => experienceClients.delete(client));
           return;
         }
         if (req.method === "GET") {
-          let envelope = getExperience(db, envelopeId);
+          let envelope = authorizedEnvelope;
+          if (remotePrincipal) return send(res, 200, sanitizeRemoteEnvelope(envelope));
           const sessionId = envelope.active.session_id;
           const runId = envelope.active.run_id ?? undefined;
           const snapshot = sessionId
@@ -440,6 +656,9 @@ export function startGateway(db: Db, engine: OpenCodeEngine, corePid: number, st
             return send(res, 400, { error: "experience patch must be a JSON object" });
           }
           const rawPatch = raw as Record<string, unknown>;
+          const currentAuthorizedEnvelope = remotePrincipal ? getExperience(db, envelopeId) : authorizedEnvelope;
+          requireRemoteEnvelopeContext(remotePrincipal, currentAuthorizedEnvelope);
+          validateRemoteExperiencePatch(rawPatch, remotePrincipal, currentAuthorizedEnvelope);
           if ("pending_questions" in rawPatch || "pending_permissions" in rawPatch) {
             return send(res, 400, { error: "pending questions and permissions are Core-owned" });
           }
@@ -448,17 +667,21 @@ export function startGateway(db: Db, engine: OpenCodeEngine, corePid: number, st
           }
           const patch = rawPatch as unknown as ExperienceEnvelopePatch;
           try {
-            const envelope = updateExperience(db, envelopeId, patch, { actor: "surface:http", device_id: patch.device_id });
+            const envelope = updateExperience(db, envelopeId, patch, {
+              actor: remotePrincipal ? `device:${remotePrincipal.deviceId}` : "surface:http",
+              device_id: remotePrincipal?.deviceId ?? null,
+            });
             broadcastExperience(envelope);
-            return send(res, 200, envelope);
+            return send(res, 200, remotePrincipal ? sanitizeRemoteEnvelope(envelope) : envelope);
           } catch (error) {
             if (error instanceof ExperienceConflictError) {
               const envelope = getExperience(db, envelopeId);
+              requireRemoteEnvelopeContext(remotePrincipal, envelope);
               return send(res, 409, {
                 error: "revision_conflict",
                 expected_revision: patch.expected_revision,
                 actual_revision: envelope.revision,
-                envelope,
+                envelope: remotePrincipal ? sanitizeRemoteEnvelope(envelope) : envelope,
               });
             }
             throw error;
@@ -466,12 +689,12 @@ export function startGateway(db: Db, engine: OpenCodeEngine, corePid: number, st
         }
         return send(res, 405, { error: "experience envelope supports GET and PATCH" });
       }
-      // Device enrollment remains Core-token protected. Authentication and
-      // handoff consumption are still loopback-only until private HTTPS remote
-      // attach is enabled; never expose this listener on a public interface.
+      // Device enrollment remains local Core-token protected. Authentication
+      // and handoff consumption are the only self-authenticating routes on the
+      // remote-safe listener, which must remain behind private HTTPS.
       if (path === "/api/devices/enroll" && req.method === "POST") {
-        const body = (await readBody(req)) as { metadata?: Record<string, unknown>; device_id?: string };
-        const enrolled = await experienceSecurity.enrollDevice(body.metadata ?? {}, body.device_id);
+        const body = (await readBody(req)) as { metadata?: Record<string, unknown>; device_id?: string; allowed_scopes?: ExperienceDeviceSessionScope[] };
+        const enrolled = await experienceSecurity.enrollDevice(body.metadata ?? {}, body.device_id, body.allowed_scopes);
         return send(res, 201, {
           device_id: enrolled.deviceId,
           secret: enrolled.secret,
@@ -483,11 +706,19 @@ export function startGateway(db: Db, engine: OpenCodeEngine, corePid: number, st
         const body = (await readBody(req)) as { device_id?: string; secret?: string };
         if (!body.device_id || !body.secret) return send(res, 400, { error: "device_id and secret required" });
         const authenticated = await experienceSecurity.authenticateDevice(body.device_id, body.secret);
+        const session = experienceSecurity.issueDeviceSession(authenticated.deviceId);
+        res.setHeader("cache-control", "no-store");
         return send(res, 200, {
           device_id: authenticated.deviceId,
           metadata: authenticated.metadata,
           authenticated_at: authenticated.authenticatedAt,
+          session: deviceSessionResponse(session),
         });
+      }
+      if (path === "/api/device-sessions/current" && req.method === "DELETE" && remotePrincipal) {
+        return experienceSecurity.revokeDeviceSession(remotePrincipal.sessionId, `device:${remotePrincipal.deviceId}`)
+          ? send(res, 200, { session_id: remotePrincipal.sessionId, revoked: true })
+          : send(res, 404, { error: "no active device session" });
       }
       if (path.match(/^\/api\/devices\/[^/]+$/) && req.method === "DELETE") {
         const deviceId = decodeURIComponent(path.split("/")[3] ?? "");
@@ -496,7 +727,7 @@ export function startGateway(db: Db, engine: OpenCodeEngine, corePid: number, st
           : send(res, 404, { error: "no active device" });
       }
       if (path === "/api/handoffs" && req.method === "POST") {
-        const body = (await readBody(req)) as { envelope_id?: string; envelope_revision?: number; created_by_device_id?: string; ttl_ms?: number };
+        const body = (await readBody(req)) as { envelope_id?: string; envelope_revision?: number; created_by_device_id?: string; ttl_ms?: number; scopes?: ExperienceDeviceSessionScope[] };
         const envelope = getExperience(db, body.envelope_id ?? "primary");
         const revision = body.envelope_revision ?? envelope.revision;
         if (revision !== envelope.revision) {
@@ -507,6 +738,7 @@ export function startGateway(db: Db, engine: OpenCodeEngine, corePid: number, st
           envelopeRevision: revision,
           createdByDeviceId: body.created_by_device_id,
           ttlMs: body.ttl_ms,
+          scopes: body.scopes,
         });
         return send(res, 201, {
           handoff_id: issued.handoffId,
@@ -530,23 +762,37 @@ export function startGateway(db: Db, engine: OpenCodeEngine, corePid: number, st
           return send(res, 400, { error: "token, device_id, and device_secret required" });
         }
         await experienceSecurity.authenticateDevice(body.device_id, body.device_secret);
-        const consumed = experienceSecurity.consumeHandoff(body.token, body.device_id, (envelopeId, envelopeRevision) => {
-          const row = db.prepare(`SELECT revision FROM experience_envelopes WHERE id = ?`).get(envelopeId) as { revision: number } | undefined;
-          if (!row || Number(row.revision) !== envelopeRevision) {
+        const consumed = experienceSecurity.consumeHandoffForDevice(body.token, body.device_id, (envelopeId, envelopeRevision) => {
+          const envelope = getExperience(db, envelopeId);
+          if (Number(envelope.revision) !== envelopeRevision) {
             throw new ExperienceSecurityError(
               "handoff_stale",
               `handoff authorized ${envelopeId} revision ${envelopeRevision}, which is no longer current`,
               409,
             );
           }
+          const artifactIds = envelope.active.run_id
+            ? (db.prepare(`SELECT artifact_id FROM run_artifacts WHERE run_id = ?`).all(envelope.active.run_id) as Array<{ artifact_id: string }>).map((row) => row.artifact_id)
+            : [];
+          return {
+            envelope_ids: [envelope.id],
+            project_ids: envelope.active.project_id ? [envelope.active.project_id] : [],
+            session_ids: envelope.active.session_id ? [envelope.active.session_id] : [],
+            run_ids: envelope.active.run_id ? [envelope.active.run_id] : [],
+            artifact_ids: artifactIds,
+          };
         });
+        res.setHeader("cache-control", "no-store");
         return send(res, 200, {
-          handoff_id: consumed.handoffId,
-          envelope_id: consumed.envelopeId,
-          envelope_revision: consumed.envelopeRevision,
-          created_by_device_id: consumed.createdByDeviceId,
-          consumed_at: consumed.consumedAt,
-          envelope: getExperience(db, consumed.envelopeId),
+          handoff_id: consumed.handoff.handoffId,
+          envelope_id: consumed.handoff.envelopeId,
+          envelope_revision: consumed.handoff.envelopeRevision,
+          created_by_device_id: consumed.handoff.createdByDeviceId,
+          consumed_at: consumed.handoff.consumedAt,
+          envelope: boundary === "remote"
+            ? sanitizeRemoteEnvelope(getExperience(db, consumed.handoff.envelopeId))
+            : getExperience(db, consumed.handoff.envelopeId),
+          session: deviceSessionResponse(consumed.session),
         });
       }
       if (path.match(/^\/api\/handoffs\/[^/]+$/) && req.method === "DELETE") {
@@ -582,6 +828,7 @@ export function startGateway(db: Db, engine: OpenCodeEngine, corePid: number, st
         const isAttach = path.endsWith("/attach");
         if (isAttach && req.method !== "POST") return send(res, 405, { error: "attach is POST" });
         if (!isAttach && req.method !== "GET") return send(res, 405, { error: "events is GET" });
+        requireRemoteResource(remotePrincipal, "session_ids", sessionId);
         if (!db.prepare(`SELECT id FROM sessions WHERE id = ?`).get(sessionId)) {
           return send(res, 404, { error: "no such session" });
         }
@@ -589,10 +836,12 @@ export function startGateway(db: Db, engine: OpenCodeEngine, corePid: number, st
         let runId = url.searchParams.get("run_id") ?? undefined;
         if (isAttach) {
           const body = (await readBody(req).catch(() => ({}))) as { actor?: string; run_id?: string };
-          actor = body.actor ?? "anonymous";
+          actor = remotePrincipal ? `device:${remotePrincipal.deviceId}` : body.actor ?? "anonymous";
           runId = body.run_id ?? runId;
         }
+        if (remotePrincipal && !runId) return send(res, 400, { error: "remote session attach requires run_id" });
         if (runId) {
+          requireRemoteResource(remotePrincipal, "run_ids", runId);
           const scopedRun = db.prepare(`SELECT id FROM runs WHERE id = ? AND session_id = ?`).get(runId, sessionId);
           if (!scopedRun) return send(res, 404, { error: "run does not belong to session" });
         }
@@ -606,7 +855,9 @@ export function startGateway(db: Db, engine: OpenCodeEngine, corePid: number, st
         const lastRaw = req.headers["last-event-id"] ?? url.searchParams.get("lastEventId");
         const hasResume = lastRaw !== undefined && lastRaw !== null;
         const lastSeq = hasResume ? Number(Array.isArray(lastRaw) ? lastRaw[0] : lastRaw) || 0 : sessionBuffer.lastSeq(bufferKey);
+        ensureRemoteStreamCapacity(remotePrincipal);
         res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
+        if (remotePrincipal) registerRemoteStream(res, remotePrincipal);
         let clientClosed = false;
         let client: SessionSseClient | null = null;
         res.on("close", () => {
@@ -698,6 +949,7 @@ export function startGateway(db: Db, engine: OpenCodeEngine, corePid: number, st
       }
       if (path.match(/^\/api\/sessions\/[^/]+\/steer$/) && req.method === "POST") {
         const sessionId = path.split("/")[3] ?? "";
+        requireRemoteResource(remotePrincipal, "session_ids", sessionId);
         const body = (await readBody(req)) as {
           type?: "steer" | "answer" | "permission";
           text?: string;
@@ -707,19 +959,23 @@ export function startGateway(db: Db, engine: OpenCodeEngine, corePid: number, st
           actor?: string;
           run_id?: string;
         };
+        if (remotePrincipal && !body.run_id) return send(res, 400, { error: "remote session input requires run_id" });
+        if (body.run_id) requireRemoteResource(remotePrincipal, "run_ids", body.run_id);
         if (body.run_id && !db.prepare(`SELECT id FROM runs WHERE id = ? AND session_id = ?`).get(body.run_id, sessionId)) {
           return send(res, 404, { error: "run does not belong to session" });
         }
         const target = activeEngineSession(db, sessionId, body.run_id);
         if (!target) return send(res, 409, { error: "session has no engine session to receive input" });
-        const actor = body.actor ?? "anonymous";
+        const actor = remotePrincipal ? `device:${remotePrincipal.deviceId}` : body.actor ?? "anonymous";
         if (body.type === "steer") {
+          requireRemoteScope(remotePrincipal, "session:steer");
           if (!body.text) return send(res, 400, { error: "text required for steer" });
           await engine.steer(target.engine_session_id, body.text);
           appendEvidence(db, "engine.steer.submitted", actor, { chars: body.text.length, text: body.text.slice(0, 500) }, {
             session_id: sessionId, run_id: target.run_id, job_id: target.job_id,
           });
         } else if (body.type === "answer") {
+          requireRemoteScope(remotePrincipal, "session:answer");
           if (!body.request_id) return send(res, 400, { error: "request_id required for answer" });
           const answers = body.answers ?? (body.text ? [[body.text]] : null);
           if (!answers) return send(res, 400, { error: "answers or text required" });
@@ -734,6 +990,7 @@ export function startGateway(db: Db, engine: OpenCodeEngine, corePid: number, st
           });
           await synchronizeEnvelopePendingForSession(db, engine, sessionId, target.run_id);
         } else if (body.type === "permission") {
+          requireRemoteScope(remotePrincipal, "session:permission");
           if (!body.request_id || !body.reply) return send(res, 400, { error: "request_id and reply required" });
           try {
             await engine.replyPermission(target.engine_session_id, body.request_id, body.reply);
@@ -752,8 +1009,11 @@ export function startGateway(db: Db, engine: OpenCodeEngine, corePid: number, st
       }
       if (path.match(/^\/api\/runs\/[^/]+\/stream$/) && req.method === "GET") {
         const runId = path.split("/")[3] ?? "";
+        requireRemoteResource(remotePrincipal, "run_ids", runId);
         if (!db.prepare(`SELECT id FROM runs WHERE id = ?`).get(runId)) return send(res, 404, { error: "no such run" });
+        ensureRemoteStreamCapacity(remotePrincipal);
         res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
+        if (remotePrincipal) registerRemoteStream(res, remotePrincipal);
         res.write(`event: hello\ndata: ${JSON.stringify({ run_id: runId })}\n\n`);
         const client = { res, run_id: runId };
         sseClients.add(client);
@@ -763,8 +1023,17 @@ export function startGateway(db: Db, engine: OpenCodeEngine, corePid: number, st
       if (path.startsWith("/api/runs/") && req.method === "GET") {
         const parts = path.split("/");
         const runId = parts[3] ?? "";
+        requireRemoteResource(remotePrincipal, "run_ids", runId);
         if (parts[4] === "artifact") {
+          requireRemoteScope(remotePrincipal, "artifact:read");
           const role = parts[5] ?? "diff";
+          if (remotePrincipal) {
+            const linked = db.prepare(
+              `SELECT artifact_id FROM run_artifacts WHERE run_id = ? AND role = ?`,
+            ).get(runId, role) as { artifact_id: string } | undefined;
+            if (!linked) return send(res, 404, { error: "no such artifact role" });
+            requireRemoteResource(remotePrincipal, "artifact_ids", linked.artifact_id);
+          }
           const content = readRunArtifact(db, runId, role);
           if (content === null) return send(res, 404, { error: "no such artifact role" });
           return send(res, 200, content, "text/plain; charset=utf-8");
@@ -826,6 +1095,15 @@ export function startGateway(db: Db, engine: OpenCodeEngine, corePid: number, st
       }
       if (path.startsWith("/api/artifacts/")) {
         const id = path.split("/")[3] ?? "";
+        if (remotePrincipal) {
+          requireRemoteResource(remotePrincipal, "artifact_ids", id);
+          const linked = db.prepare(
+            `SELECT run_id FROM run_artifacts WHERE artifact_id = ?`,
+          ).all(id) as Array<{ run_id: string }>;
+          if (!linked.some((row) => remotePrincipal!.resources.run_ids.includes(row.run_id))) {
+            throw new ExperienceSecurityError("scope_denied", "device session is not authorized for artifact", 403);
+          }
+        }
         const art = getArtifact(db, id);
         if (!art) return send(res, 404, { error: "no such artifact" });
         return send(res, 200, art.content.toString("utf8"), String(art.meta.mime ?? "text/plain"));
@@ -878,15 +1156,28 @@ export function startGateway(db: Db, engine: OpenCodeEngine, corePid: number, st
       const status = err instanceof ExperienceSecurityError
         ? err.httpStatus
         : err instanceof RequestJsonError ? 400
+        : err instanceof RequestBodyTooLargeError ? 413
         : typeof err === "object" && err && "statusCode" in err ? Number(err.statusCode) : 500;
       const body = err instanceof ExperienceSecurityError
         ? { error: err.code, message: err.message }
         : err instanceof RequestJsonError ? { error: "invalid_json", message: err.message }
+        : err instanceof RequestBodyTooLargeError ? { error: "payload_too_large", message: err.message }
         : { error: String(err) };
       return send(res, Number.isInteger(status) && status >= 400 && status <= 599 ? status : 500, body);
     }
   });
 
-  server.listen(CORE_PORT, LOOPBACK);
+  server.headersTimeout = 10_000;
+  server.requestTimeout = 30_000;
+  server.keepAliveTimeout = 5_000;
+  server.listen(boundary === "local" ? CORE_PORT : REMOTE_CORE_PORT, LOOPBACK);
   return server;
+}
+
+export function startGateway(db: Db, engine: OpenCodeEngine, corePid: number, startedAt: string): ReturnType<typeof createServer> {
+  return createGateway(db, engine, corePid, startedAt, "local");
+}
+
+export function startRemoteGateway(db: Db, engine: OpenCodeEngine, corePid: number, startedAt: string): ReturnType<typeof createServer> {
+  return createGateway(db, engine, corePid, startedAt, "remote");
 }

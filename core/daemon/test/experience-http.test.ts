@@ -8,12 +8,15 @@ import { once } from "node:events";
 const runtimeRoot = mkdtempSync(join(tmpdir(), "floyd-experience-http-"));
 process.env.FLOYD_RUNTIME_ROOT = runtimeRoot;
 process.env.FLOYD_CORE_PORT = "0";
+process.env.FLOYD_REMOTE_CORE_PORT = "0";
+process.env.FLOYD_REMOTE_ORIGIN = "https://floyd.test";
 mkdirSync(join(runtimeRoot, "core"), { recursive: true, mode: 0o700 });
 
 const { openDb } = await import("../src/db.ts");
 const { gatewayToken } = await import("../src/config.ts");
-const { startGateway, pumpSessionChannel } = await import("../src/http.ts");
+const { startGateway, startRemoteGateway, pumpSessionChannel } = await import("../src/http.ts");
 const { synchronizePendingInteractions } = await import("../src/experience.ts");
+const { putArtifact, linkRunArtifact } = await import("../src/artifacts.ts");
 
 const db = openDb(join(runtimeRoot, "core", "http.db"));
 let pendingProviderAvailable = false;
@@ -64,10 +67,16 @@ const engine = {
   steer: async () => {},
 } as never;
 const server = startGateway(db, engine, process.pid, new Date().toISOString());
+const remoteServer = startRemoteGateway(db, engine, process.pid, new Date().toISOString());
 if (!server.listening) await once(server, "listening");
+if (!remoteServer.listening) await once(remoteServer, "listening");
 const address = server.address();
 if (!address || typeof address === "string") throw new Error("HTTP test server did not bind TCP");
 const baseUrl = `http://127.0.0.1:${address.port}`;
+const remoteAddress = remoteServer.address();
+if (!remoteAddress || typeof remoteAddress === "string") throw new Error("remote HTTP test server did not bind TCP");
+const remotePort = remoteAddress.port;
+const remoteBaseUrl = `http://127.0.0.1:${remotePort}`;
 const authorization = { authorization: `Bearer ${gatewayToken()}` };
 
 async function api(path: string, init: RequestInit = {}): Promise<Response> {
@@ -85,6 +94,25 @@ async function selfAuthenticatedPost(path: string, body: unknown): Promise<Respo
   return fetch(`${baseUrl}${path}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+async function remoteApi(path: string, token: string, init: RequestInit = {}): Promise<Response> {
+  return fetch(`${remoteBaseUrl}${path}`, {
+    ...init,
+    headers: {
+      authorization: `Bearer ${token}`,
+      ...(init.body ? { "content-type": "application/json" } : {}),
+      ...init.headers,
+    },
+  });
+}
+
+async function remoteSelfAuthenticatedPost(path: string, body: unknown, origin = "https://floyd.test"): Promise<Response> {
+  return fetch(`${remoteBaseUrl}${path}`, {
+    method: "POST",
+    headers: { "content-type": "application/json", origin },
     body: JSON.stringify(body),
   });
 }
@@ -196,9 +224,22 @@ test("HTTP device and one-time handoff lifecycle returns the bound envelope", as
   assert.equal(enrollment.status, 201);
   const device = await enrollment.json() as { device_id: string; secret: string };
 
-  const authenticated = await selfAuthenticatedPost("/api/devices/authenticate", { device_id: device.device_id, secret: device.secret });
+  const hostileOrigin = await remoteSelfAuthenticatedPost(
+    "/api/devices/authenticate",
+    { device_id: device.device_id, secret: device.secret },
+    "https://attacker.test",
+  );
+  assert.equal(hostileOrigin.status, 403);
+
+  const authenticated = await remoteSelfAuthenticatedPost("/api/devices/authenticate", { device_id: device.device_id, secret: device.secret });
   assert.equal(authenticated.status, 200);
-  assert.deepEqual((await authenticated.json() as { metadata: unknown }).metadata, { surface: "test" });
+  const authenticatedBody = await authenticated.json() as { metadata: unknown; session: { token: string; scopes: string[] } };
+  assert.deepEqual(authenticatedBody.metadata, { surface: "test" });
+  assert.deepEqual(authenticatedBody.session.scopes, ["health:read"]);
+  assert.equal((await remoteApi("/api/health", authenticatedBody.session.token)).status, 200);
+  assert.equal((await remoteApi("/api/state", authenticatedBody.session.token)).status, 403);
+  assert.equal((await remoteApi("/api/experience/primary", authenticatedBody.session.token)).status, 403);
+  assert.equal((await remoteApi("/gateway", authenticatedBody.session.token, { method: "POST" })).status, 401);
 
   const envelope = await (await api("/api/experience/primary")).json() as { revision: number };
   const issue = await api("/api/handoffs", {
@@ -214,15 +255,36 @@ test("HTTP device and one-time handoff lifecycle returns the bound envelope", as
   const handoff = await issue.json() as { token: string; deep_link: string };
   assert.match(handoff.deep_link, /^floyd:\/\/handoff\?/);
 
-  const consumed = await selfAuthenticatedPost("/api/handoffs/consume", {
+  const consumed = await remoteSelfAuthenticatedPost("/api/handoffs/consume", {
     token: handoff.token,
     device_id: device.device_id,
     device_secret: device.secret,
   });
   assert.equal(consumed.status, 200);
-  const consumedBody = await consumed.json() as { envelope: { id: string; revision: number } };
+  const consumedBody = await consumed.json() as { envelope: { id: string; revision: number }; session: { token: string; resources: { envelope_ids: string[] } } };
   assert.equal(consumedBody.envelope.id, "primary");
   assert.equal(consumedBody.envelope.revision, envelope.revision);
+  assert.deepEqual(consumedBody.session.resources.envelope_ids, ["primary"]);
+  assert.equal((await remoteApi("/api/experience/primary", consumedBody.session.token)).status, 200);
+  const remoteState = await remoteApi("/api/state", consumedBody.session.token);
+  assert.equal(remoteState.status, 200);
+  const remoteStateText = await remoteState.text();
+  assert.equal(remoteStateText.includes("credential_ref"), false);
+  assert.equal(remoteStateText.includes("root_path"), false);
+  const escapedActive = await remoteApi("/api/experience/primary", consumedBody.session.token, {
+    method: "PATCH",
+    body: JSON.stringify({ expected_revision: envelope.revision, active: { project_id: "project-outside-grant", session_id: null, run_id: null } }),
+  });
+  assert.equal(escapedActive.status, 403);
+  const escapedModel = await remoteApi("/api/experience/primary", consumedBody.session.token, {
+    method: "PATCH",
+    body: JSON.stringify({ expected_revision: envelope.revision, model_route: { provider_profile_id: "outside" } }),
+  });
+  assert.equal(escapedModel.status, 403);
+  assert.equal((await remoteApi("/api/experience/other", consumedBody.session.token)).status, 403);
+  const logout = await remoteApi("/api/device-sessions/current", consumedBody.session.token, { method: "DELETE" });
+  assert.equal(logout.status, 200);
+  assert.equal((await remoteApi("/api/experience/primary", consumedBody.session.token)).status, 401);
 
   const replay = await selfAuthenticatedPost("/api/handoffs/consume", {
     token: handoff.token,
@@ -250,6 +312,42 @@ test("HTTP device and one-time handoff lifecycle returns the bound envelope", as
   });
   assert.equal(staleConsume.status, 409);
   assert.equal((await staleConsume.json() as { error: string }).error, "handoff_stale");
+
+  const currentEnvelope = await (await api("/api/experience/primary")).json() as { revision: number };
+  const streamIssue = await api("/api/handoffs", {
+    method: "POST",
+    body: JSON.stringify({ envelope_id: "primary", envelope_revision: currentEnvelope.revision }),
+  });
+  const streamHandoff = await streamIssue.json() as { token: string };
+  const streamConsume = await remoteSelfAuthenticatedPost("/api/handoffs/consume", {
+    token: streamHandoff.token,
+    device_id: device.device_id,
+    device_secret: device.secret,
+  });
+  const streamSession = await streamConsume.json() as { session: { token: string } };
+  const streamResponse = await remoteApi("/api/experience/primary/stream", streamSession.session.token, {
+    headers: { accept: "text/event-stream" },
+  });
+  assert.equal(streamResponse.status, 200);
+  const streamReader = streamResponse.body!.getReader();
+  assert.equal((await streamReader.read()).done, false);
+  const revokedDevice = await api(`/api/devices/${encodeURIComponent(device.device_id)}`, { method: "DELETE" });
+  assert.equal(revokedDevice.status, 200);
+  const closed = await Promise.race([
+    (async () => {
+      for (let read = 0; read < 5; read += 1) {
+        try {
+          if ((await streamReader.read()).done) return true;
+        } catch {
+          return true;
+        }
+      }
+      return false;
+    })(),
+    new Promise<false>((resolve) => setTimeout(() => resolve(false), 500)),
+  ]);
+  assert.equal(closed, true);
+  assert.equal((await remoteApi("/api/experience/primary", streamSession.session.token)).status, 403);
 });
 
 test("a fresh session attach receives a durable transcript snapshot", async () => {
@@ -377,9 +475,104 @@ test("a fresh session attach receives a durable transcript snapshot", async () =
   assert.doesNotMatch(raceText, /stale-permission/);
   raceController.abort();
   await raceReader.cancel().catch(() => {});
+
+  const readerEnrollment = await api("/api/devices/enroll", {
+    method: "POST",
+    body: JSON.stringify({
+      device_id: "device-run-reader",
+      metadata: { surface: "read-only" },
+      allowed_scopes: ["health:read", "state:read", "experience:read", "run:read", "artifact:read"],
+    }),
+  });
+  const readerDevice = await readerEnrollment.json() as { device_id: string; secret: string };
+  const boundEnvelope = await (await api("/api/experience/primary")).json() as { revision: number };
+  const readerIssue = await api("/api/handoffs", {
+    method: "POST",
+    body: JSON.stringify({ envelope_id: "primary", envelope_revision: boundEnvelope.revision }),
+  });
+  const readerHandoff = await readerIssue.json() as { token: string };
+  const readerConsume = await remoteSelfAuthenticatedPost("/api/handoffs/consume", {
+    token: readerHandoff.token,
+    device_id: readerDevice.device_id,
+    device_secret: readerDevice.secret,
+  });
+  const readerSession = await readerConsume.json() as { session: { token: string; scopes: string[] } };
+  assert.equal(readerSession.session.scopes.includes("run:read"), true);
+  assert.equal(readerSession.session.scopes.includes("artifact:read"), true);
+  const lateArtifact = putArtifact(db, "created after handoff", "text/plain", "late artifact");
+  linkRunArtifact(db, "run-http", "job-http", lateArtifact, "late");
+  assert.equal((await remoteApi("/api/runs/run-http", readerSession.session.token)).status, 200);
+  assert.equal((await remoteApi("/api/runs/run-http/artifact/late", readerSession.session.token)).status, 403);
+  assert.equal((await remoteApi(`/api/artifacts/${lateArtifact}`, readerSession.session.token)).status, 403);
+  const filteredState = await remoteApi("/api/state", readerSession.session.token);
+  assert.equal(filteredState.status, 200);
+  const filtered = await filteredState.json() as { projects: Array<{ id: string }>; sessions: Array<{ id: string }>; runs: Array<{ id: string }>; leases: unknown[] };
+  assert.deepEqual(filtered.projects.map((item) => item.id), ["project-http"]);
+  assert.deepEqual(filtered.sessions.map((item) => item.id), ["session-http"]);
+  assert.deepEqual(filtered.runs.map((item) => item.id), ["run-http"]);
+  assert.deepEqual(filtered.leases, []);
+  const contextStreamResponse = await remoteApi("/api/experience/primary/stream", readerSession.session.token, {
+    headers: { accept: "text/event-stream" },
+  });
+  const contextStreamReader = contextStreamResponse.body!.getReader();
+  assert.equal((await contextStreamReader.read()).done, false);
+  const beforeMove = await (await api("/api/experience/primary")).json() as { revision: number };
+  const remoteClear = await remoteApi("/api/experience/primary", readerSession.session.token, {
+    method: "PATCH",
+    body: JSON.stringify({ expected_revision: beforeMove.revision, active: { project_id: null, session_id: null, run_id: null } }),
+  });
+  assert.equal(remoteClear.status, 403);
+  const afterDeniedClear = await (await api("/api/experience/primary")).json() as { revision: number; active: { run_id: string | null } };
+  assert.equal(afterDeniedClear.revision, beforeMove.revision);
+  assert.equal(afterDeniedClear.active.run_id, "run-http");
+  const delayedPayload = JSON.stringify({ expected_revision: beforeMove.revision + 1, composer_draft: "must not cross contexts" });
+  let finishDelayedBody!: () => void;
+  const delayedBody = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(delayedPayload.slice(0, -1)));
+      finishDelayedBody = () => {
+        controller.enqueue(new TextEncoder().encode(delayedPayload.slice(-1)));
+        controller.close();
+      };
+    },
+  });
+  const delayedPatch = fetch(`${remoteBaseUrl}/api/experience/primary`, {
+    method: "PATCH",
+    headers: { authorization: `Bearer ${readerSession.session.token}`, "content-type": "application/json" },
+    body: delayedBody,
+    duplex: "half",
+  } as RequestInit & { duplex: "half" });
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  const moveAway = await api("/api/experience/primary", {
+    method: "PATCH",
+    body: JSON.stringify({ expected_revision: beforeMove.revision, active: { project_id: null, session_id: null, run_id: null } }),
+  });
+  assert.equal(moveAway.status, 200);
+  finishDelayedBody();
+  const delayedPatchResponse = await delayedPatch;
+  assert.equal(delayedPatchResponse.status, 403);
+  assert.equal((await remoteApi("/api/state", readerSession.session.token)).status, 403);
+  assert.equal((await remoteApi("/api/experience/primary", readerSession.session.token)).status, 403);
+  const contextStreamClosed = await Promise.race([
+    (async () => {
+      for (let read = 0; read < 5; read += 1) {
+        try { if ((await contextStreamReader.read()).done) return true; } catch { return true; }
+      }
+      return false;
+    })(),
+    new Promise<false>((resolve) => setTimeout(() => resolve(false), 500)),
+  ]);
+  assert.equal(contextStreamClosed, true);
+  const movedEnvelope = await moveAway.json() as { revision: number };
+  const restoreBound = await api("/api/experience/primary", {
+    method: "PATCH",
+    body: JSON.stringify({ expected_revision: movedEnvelope.revision, active: { project_id: "project-http", session_id: "session-http", run_id: "run-http" } }),
+  });
+  assert.equal(restoreBound.status, 200);
 });
 
 test.after(async () => {
   await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  await new Promise<void>((resolve, reject) => remoteServer.close((error) => error ? reject(error) : resolve()));
   db.close();
 });
