@@ -23,6 +23,26 @@ export interface FloydStreamEvent<T = unknown> {
   data: T;
 }
 
+export type FloydModelProvider = "opencode-zen" | "opencode-go" | "openai" | "anthropic" | "auto";
+
+export interface FloydModelRoute {
+  provider: FloydModelProvider;
+  apiKey: string;
+  baseUrl?: string;
+  /** Optional explicit Anthropic version; Core defaults to 2023-06-01. */
+  anthropicVersion?: string;
+}
+
+export interface FloydChatMessage {
+  role: "system" | "user" | "assistant";
+  content: unknown;
+}
+
+export interface FloydModelEvent {
+  type: "delta" | "done";
+  data: { text?: string; finish_reason?: string };
+}
+
 export class FloydApiError extends Error {
   readonly status: number;
   readonly method: string;
@@ -193,5 +213,99 @@ export class FloydClient {
 
   watchRun(runId: string, signal?: AbortSignal): AsyncGenerator<FloydStreamEvent> {
     return this.stream(`/api/runs/${encodeURIComponent(runId)}/stream`, { signal });
+  }
+}
+
+/**
+ * Unified zero-dependency chat driver for the Core /gateway relay.
+ * Provider credentials are attached only to this one request and are never
+ * persisted by the SDK. Local Core auth uses x-floyd-token, leaving the
+ * provider Authorization/x-api-key headers intact for transparent forwarding.
+ */
+export class FloydModelClient {
+  readonly baseUrl: string;
+  private readonly tokenSource: FloydClientOptions["token"];
+  private readonly fetchImpl: typeof globalThis.fetch;
+
+  constructor(options: FloydClientOptions) {
+    this.baseUrl = (options.baseUrl ?? DEFAULT_FLOYD_CORE_URL).replace(/\/+$/, "");
+    this.tokenSource = options.token;
+    this.fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
+  }
+
+  private async token(): Promise<string> {
+    return typeof this.tokenSource === "function" ? this.tokenSource() : this.tokenSource;
+  }
+
+  async *streamChat(input: {
+    route: FloydModelRoute;
+    model: string;
+    messages: FloydChatMessage[];
+    temperature?: number;
+    max_tokens?: number;
+    signal?: AbortSignal;
+  }): AsyncGenerator<FloydModelEvent> {
+    const anthropic = input.route.provider === "anthropic"
+      || (input.route.provider === "auto" && input.model.toLowerCase().startsWith("claude-"));
+    const headers: Record<string, string> = {
+      "content-type": "application/json",
+      accept: "text/event-stream",
+      "x-floyd-token": await this.token(),
+      "x-floyd-provider": input.route.provider,
+      ...(input.route.baseUrl ? { "x-floyd-base-url": input.route.baseUrl } : {}),
+      ...(anthropic
+        ? {
+            "x-api-key": input.route.apiKey,
+            "anthropic-version": input.route.anthropicVersion ?? "2023-06-01",
+          }
+        : { authorization: `Bearer ${input.route.apiKey}` }),
+    };
+    const response = await this.fetchImpl(`${this.baseUrl}/gateway`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        model: input.model,
+        messages: input.messages,
+        stream: true,
+        ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
+        ...(input.max_tokens !== undefined ? { max_tokens: input.max_tokens } : {}),
+      }),
+      signal: input.signal,
+    });
+    if (!response.ok || !response.body) {
+      const text = await response.text().catch(() => "");
+      let payload: unknown = text;
+      try { payload = JSON.parse(text); } catch { /* preserve exact vendor text */ }
+      throw new FloydApiError("POST", "/gateway", response.status, payload);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true }).replace(/\r\n?/g, "\n");
+        const frames = buffer.split("\n\n");
+        buffer = frames.pop() ?? "";
+        for (const frame of frames) {
+          let type: "delta" | "done" | null = null;
+          const data: string[] = [];
+          for (const line of frame.split("\n")) {
+            if (line === "event: delta") type = "delta";
+            else if (line === "event: done") type = "done";
+            else if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
+          }
+          if (!type || data.length === 0) continue;
+          yield { type, data: JSON.parse(data.join("\n")) as FloydModelEvent["data"] };
+        }
+      }
+    } finally {
+      // Cancelling the browser reader closes /gateway; Core's close listener
+      // then destroys both the provider response and its outbound socket.
+      await reader.cancel().catch(() => {});
+      reader.releaseLock();
+    }
   }
 }

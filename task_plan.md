@@ -336,6 +336,9 @@ every item there is checked with evidence and blueprint gates A–H pass.
 - [x] Add Floyd Core to the launcher's single-source harness registry, route health through the server-side SDK, prove upstream abort propagation and all 16 harnesses, and record independent-copy head `5caf756` without pushing into its protected local donor.
 - [x] Add launch, health, recovery, and cross-surface runtime acceptance receipts, including exact five-surface Git heads and live Core/OpenCode health.
 - [x] Publish verified logical commits to each available component remote and to the whole-suite remote; retain launcher locally because its only origin is the protected donor.
+- [x] Add the zero-dependency multi-provider `/gateway` relay for OpenCode Zen, OpenCode Go, native OpenAI, native Anthropic, and compatible user endpoints.
+- [x] Add `FloydModelClient` plus the rendered cockpit model-routing settings and ephemeral chat mode; keep provider keys memory-only and preserve durable OpenCode coding runs as a separate lifecycle.
+- [x] Prove exact vendor error passthrough, dialect translation, normalized SSE, loopback CORS, client-abort socket destruction, and live authenticated Core relay behavior.
 - **Status:** complete; all five active component copies are verified, pinned in the manifest, and published where a remote exists.
 
 ## Plan Maintenance

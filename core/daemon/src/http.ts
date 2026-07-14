@@ -12,6 +12,7 @@ import { recallMemory } from "./memory.ts";
 import { listSkills, loadSkill, registerSkill } from "./skills.ts";
 import { normalizeEngineEvent, type SessionMap } from "./live-channel.ts";
 import { classifyEngineEvent, SessionBuffer } from "./session-channel.ts";
+import { relayProviderRequest } from "./provider-gateway.ts";
 
 const COCKPIT_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "apps", "cockpit", "public");
 const BROWSER_SDK = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "packages", "sdk", "browser", "floyd-sdk.js");
@@ -163,14 +164,44 @@ export function startGateway(db: Db, engine: OpenCodeEngine, corePid: number, st
     const url = new URL(req.url ?? "/", `http://${LOOPBACK}:${CORE_PORT}`);
     const path = url.pathname;
 
-    // --- auth: loopback bind + bearer/query token (cockpit browser bootstrap) ---
-    const auth = req.headers.authorization?.replace(/^Bearer\s+/i, "") ?? url.searchParams.get("token") ?? "";
-    const isStatic = !path.startsWith("/api/");
+    // /gateway reserves Authorization and x-api-key for the upstream provider,
+    // so local Core authentication uses a distinct header on that route.
+    const isProviderGateway = path === "/gateway";
+    if (isProviderGateway && req.headers.origin) {
+      let allowedOrigin = "";
+      try {
+        const origin = new URL(req.headers.origin);
+        if (["localhost", "127.0.0.1", "::1"].includes(origin.hostname)) allowedOrigin = origin.origin;
+      } catch { /* malformed or opaque origin remains denied */ }
+      if (!allowedOrigin) return send(res, 403, { error: "gateway CORS permits loopback origins only" });
+      res.setHeader("access-control-allow-origin", allowedOrigin);
+      res.setHeader("vary", "origin");
+      if (req.method === "OPTIONS") {
+        res.writeHead(204, {
+          "access-control-allow-methods": "POST, OPTIONS",
+          "access-control-allow-headers": "content-type, authorization, x-api-key, anthropic-version, x-floyd-token, x-floyd-provider, x-floyd-base-url",
+          "access-control-max-age": "600",
+        });
+        return res.end();
+      }
+    }
+    const gatewayAuth = Array.isArray(req.headers["x-floyd-token"])
+      ? req.headers["x-floyd-token"][0]
+      : req.headers["x-floyd-token"];
+    const auth = isProviderGateway
+      ? gatewayAuth ?? ""
+      : req.headers.authorization?.replace(/^Bearer\s+/i, "") ?? url.searchParams.get("token") ?? "";
+    const isStatic = !path.startsWith("/api/") && !isProviderGateway;
     if (!isStatic && auth !== token) {
       return send(res, 401, { error: "unauthorized: missing/invalid gateway token" });
     }
 
     try {
+      if (isProviderGateway) {
+        if (req.method !== "POST") return send(res, 405, { error: "gateway is POST" });
+        await relayProviderRequest(req, res);
+        return;
+      }
       // ---------- API ----------
       if (path === "/api/health") {
         return send(res, 200, {
@@ -421,7 +452,12 @@ export function startGateway(db: Db, engine: OpenCodeEngine, corePid: number, st
       }
       return send(res, 404, { error: "not found" });
     } catch (err) {
-      return send(res, 500, { error: String(err) });
+      if (res.headersSent || res.destroyed) {
+        res.destroy(err instanceof Error ? err : new Error(String(err)));
+        return;
+      }
+      const status = typeof err === "object" && err && "statusCode" in err ? Number(err.statusCode) : 500;
+      return send(res, Number.isInteger(status) && status >= 400 && status <= 599 ? status : 500, { error: String(err) });
     }
   });
 

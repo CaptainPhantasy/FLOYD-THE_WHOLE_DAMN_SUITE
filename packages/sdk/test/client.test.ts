@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { FloydApiError, FloydClient } from "../src/index.ts";
+import { FloydApiError, FloydClient, FloydModelClient } from "../src/index.ts";
 
 test("client forwards bearer auth, JSON, and exact upstream errors", async () => {
   const seen: Request[] = [];
@@ -81,4 +81,63 @@ test("aborting a surface stream propagates to the network request", async () => 
   controller.abort();
   await assert.rejects(pending, (error: unknown) => error instanceof Error && error.name === "AbortError");
   assert.equal(networkAborted, true);
+});
+
+test("model driver separates Core auth, preserves provider auth, and reads normalized SSE", async () => {
+  let seen: Request | undefined;
+  let cancelled = false;
+  const fetchMock: typeof fetch = async (input, init) => {
+    seen = input instanceof Request ? input : new Request(input, init);
+    return new Response(new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(
+          'event: delta\ndata: {"text":"hello"}\n\nevent: done\ndata: {"finish_reason":"stop"}\n\n',
+        ));
+      },
+      cancel() { cancelled = true; },
+    }), { headers: { "content-type": "text/event-stream" } });
+  };
+  const client = new FloydModelClient({ token: "core-secret", fetch: fetchMock });
+  const events = client.streamChat({
+    route: { provider: "opencode-go", apiKey: "provider-secret" },
+    model: "kimi-test",
+    messages: [{ role: "user", content: "build it" }],
+  });
+  const first = await events.next();
+  assert.deepEqual(first.value, { type: "delta", data: { text: "hello" } });
+  await events.return(undefined);
+  assert.equal(seen?.headers.get("x-floyd-token"), "core-secret");
+  assert.equal(seen?.headers.get("authorization"), "Bearer provider-secret");
+  assert.equal(seen?.headers.get("x-floyd-provider"), "opencode-go");
+  assert.equal(cancelled, true);
+});
+
+test("model driver uses Anthropic key/version headers and preserves exact relay errors", async () => {
+  let seen: Request | undefined;
+  const fetchMock: typeof fetch = async (input, init) => {
+    seen = input instanceof Request ? input : new Request(input, init);
+    return new Response('{"error":{"message":"bad key"}}', {
+      status: 401,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new FloydModelClient({ token: "core-secret", fetch: fetchMock });
+  await assert.rejects(
+    async () => {
+      for await (const _event of client.streamChat({
+        route: { provider: "anthropic", apiKey: "anthropic-secret" },
+        model: "claude-test",
+        messages: [{ role: "user", content: "hello" }],
+      })) { /* no frames on error */ }
+    },
+    (error: unknown) => {
+      assert.ok(error instanceof FloydApiError);
+      assert.equal(error.status, 401);
+      assert.deepEqual(error.payload, { error: { message: "bad key" } });
+      return true;
+    },
+  );
+  assert.equal(seen?.headers.get("x-api-key"), "anthropic-secret");
+  assert.equal(seen?.headers.get("anthropic-version"), "2023-06-01");
+  assert.equal(seen?.headers.get("authorization"), null);
 });

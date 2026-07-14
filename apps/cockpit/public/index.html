@@ -56,6 +56,11 @@
   .project-block { padding: 11px; border-bottom: 1px solid var(--line); }
   select { width: 100%; color: var(--text); background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; outline: none; }
   select:focus { border-color: var(--accent); }
+  .settings-field { display: block; margin-bottom: 10px; }
+  .settings-field span { display: block; margin-bottom: 4px; color: var(--muted); font: 10px var(--mono); }
+  .settings-field input, .settings-field select { width: 100%; color: var(--text); background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; outline: none; }
+  .settings-field input:focus, .settings-field select:focus { border-color: var(--accent); }
+  .settings-note { color: var(--faint); font-size: 10px; margin: 8px 0 12px; }
   .run-list { flex: 1; overflow: auto; padding: 7px; }
   .run-item { width: 100%; text-align: left; border: 1px solid transparent; background: transparent; border-radius: 6px; padding: 9px; cursor: pointer; margin-bottom: 3px; }
   .run-item:hover { background: var(--surface-2); }
@@ -136,7 +141,7 @@
     <button class="rail-button" title="Projects" aria-label="Projects">PR</button>
     <button class="rail-button" title="Evidence" aria-label="Evidence">EV</button>
     <div class="rail-spacer"></div>
-    <button class="rail-button" title="Settings" aria-label="Settings">ST</button>
+    <button class="rail-button" id="modelSettings" title="Model routing settings" aria-label="Model routing settings">ST</button>
   </nav>
   <aside class="sidebar">
     <div class="panel-heading"><span>Workspace</span><button class="quiet-button" id="newTask">New</button></div>
@@ -193,6 +198,11 @@ const app = {
   streamAbort: null,
   transcripts: new Map(),
   refreshTimer: null,
+  modelRoute: (() => {
+    try { return JSON.parse(sessionStorage.getItem("floyd_model_route") || '{"provider":"opencode-go","model":"","baseUrl":""}'); }
+    catch { return { provider: "opencode-go", model: "", baseUrl: "" }; }
+  })(),
+  modelKey: "",
 };
 
 const el = (id) => document.getElementById(id);
@@ -333,9 +343,52 @@ async function renderInspector() {
   } catch (error) { notify(error); }
 }
 
+function renderModelSettings() {
+  const route = app.modelRoute;
+  el("inspectStatus").textContent = "Model routing";
+  el("inspectorBody").innerHTML = `
+    <div class="inspect-section"><div class="inspect-label">Completion provider</div>
+      <label class="settings-field"><span>Provider</span><select id="modelProvider">
+        ${["opencode-go", "opencode-zen", "openai", "anthropic", "auto"].map((value) => `<option value="${value}" ${route.provider === value ? "selected" : ""}>${value}</option>`).join("")}
+      </select></label>
+      <label class="settings-field"><span>Model</span><input id="modelName" value="${escapeHtml(route.model || "")}" placeholder="Provider model ID" autocomplete="off"></label>
+      <label class="settings-field"><span>Base URL override</span><input id="modelBaseUrl" value="${escapeHtml(route.baseUrl || "")}" placeholder="Use provider default" autocomplete="off"></label>
+      <label class="settings-field"><span>API key</span><input id="modelApiKey" type="password" value="" placeholder="Held in memory only" autocomplete="off"></label>
+      <div class="settings-note">The key is not saved to localStorage, sessionStorage, Floyd evidence, or the run database. Closing or reloading this page clears it.</div>
+      <button class="action-button primary" data-model-apply>Start model chat</button>
+    </div>
+    <div class="inspect-section"><div class="inspect-label">Routing boundary</div>
+      <div class="inspect-row"><span>Browser</span><code>@floyd/sdk</code></div>
+      <div class="inspect-row"><span>Relay</span><code>Core /gateway</code></div>
+      <div class="inspect-row"><span>Stream</span><code>delta / done</code></div>
+    </div>`;
+}
+
+function startModelChat() {
+  const provider = el("modelProvider").value;
+  const model = el("modelName").value.trim();
+  const baseUrl = el("modelBaseUrl").value.trim();
+  const apiKey = el("modelApiKey").value.trim();
+  if (!model || !apiKey) throw new Error("Model and API key are required.");
+  app.modelRoute = { provider, model, baseUrl };
+  app.modelKey = apiKey;
+  sessionStorage.setItem("floyd_model_route", JSON.stringify(app.modelRoute));
+  app.streamAbort?.abort();
+  app.currentRunId = `model-${Date.now()}`;
+  app.currentSessionId = null;
+  app.currentRun = { id: app.currentRunId, session_id: "ephemeral", goal: `${provider} / ${model}`, status: "model_chat" };
+  app.transcripts.set(app.currentRunId, [{ kind: "system", text: "Ephemeral model chat through Floyd Core. This is not a durable coding run and has no OpenCode tools or worktree." }]);
+  app.mode = "model";
+  el("modeButton").textContent = "Mode: model chat";
+  renderHeader(); renderMessages();
+  el("routeLabel").textContent = `Route: Core / ${provider} / ${model}`;
+  el("prompt").focus();
+}
+
 async function selectRun(runId) {
   app.streamAbort?.abort();
   app.streamAbort = null;
+  app.modelKey = "";
   app.currentRunId = runId;
   app.currentRun = await client.run(runId);
   app.currentSessionId = app.currentRun.session_id;
@@ -386,7 +439,26 @@ async function sendPrompt() {
   if (!text) return;
   el("send").disabled = true;
   try {
-    if (app.mode === "steer" && app.currentSessionId) {
+    if (app.mode === "model") {
+      if (!app.modelKey) throw new Error("Open model settings and enter the provider key again.");
+      addEntry(app.currentRunId, { kind: "user", text });
+      prompt.value = "";
+      const controller = new AbortController();
+      app.streamAbort = controller;
+      const messages = transcript(app.currentRunId)
+        .filter((entry) => entry.kind === "user" || entry.kind === "assistant")
+        .map((entry) => ({ role: entry.kind, content: entry.text }));
+      for await (const event of client.modelStream({
+        provider: app.modelRoute.provider,
+        apiKey: app.modelKey,
+        baseUrl: app.modelRoute.baseUrl || undefined,
+        model: app.modelRoute.model,
+        messages,
+        signal: controller.signal,
+      })) {
+        if (event.type === "delta") addEntry(app.currentRunId, { kind: "assistant-token", text: event.data.text || "" });
+      }
+    } else if (app.mode === "steer" && app.currentSessionId) {
       await client.steer(app.currentSessionId, text, actor);
       addEntry(app.currentRunId, { kind: "user", text });
     } else {
@@ -405,6 +477,7 @@ async function sendPrompt() {
 
 function startNewTask() {
   app.streamAbort?.abort();
+  app.modelKey = "";
   app.currentRunId = null;
   app.currentRun = null;
   app.currentSessionId = null;
@@ -443,6 +516,10 @@ el("messages").addEventListener("click", async (event) => {
   } catch (error) { notify(error); }
 });
 el("inspectorBody").addEventListener("click", async (event) => {
+  if (event.target.closest("[data-model-apply]")) {
+    try { startModelChat(); } catch (error) { notify(error); }
+    return;
+  }
   const card = event.target.closest("[data-artifact-role]");
   if (!card || !app.currentRunId) return;
   try {
@@ -451,7 +528,9 @@ el("inspectorBody").addEventListener("click", async (event) => {
   } catch (error) { notify(error); }
 });
 el("newTask").addEventListener("click", startNewTask);
+el("modelSettings").addEventListener("click", renderModelSettings);
 el("modeButton").addEventListener("click", () => {
+  if (app.mode === "model") { startNewTask(); return; }
   if (!app.currentRunId) return;
   app.mode = app.mode === "new" ? "steer" : "new";
   el("modeButton").textContent = app.mode === "new" ? "Mode: new run" : "Mode: guide active run";
@@ -469,6 +548,7 @@ setInterval(refreshHealth, 5000);
 app.refreshTimer = setInterval(() => refreshState(), 3500);
 await refreshHealth();
 await refreshState();
+if (query.get("settings") === "model") renderModelSettings();
 </script>
 </body>
 </html>

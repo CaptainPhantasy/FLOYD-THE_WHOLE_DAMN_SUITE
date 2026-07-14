@@ -68,6 +68,52 @@ export class FloydBrowserClient {
     }, signal);
   }
 
+  /** Stream one user-configured provider through Core's normalized relay. */
+  async *modelStream({ provider, apiKey, baseUrl, anthropicVersion, model, messages, signal }) {
+    const anthropic = provider === "anthropic" || (provider === "auto" && model.toLowerCase().startsWith("claude-"));
+    const response = await this.fetchImpl(`${this.baseUrl}/gateway`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        accept: "text/event-stream",
+        "x-floyd-token": await this.token(),
+        "x-floyd-provider": provider,
+        ...(baseUrl ? { "x-floyd-base-url": baseUrl } : {}),
+        ...(anthropic
+          ? { "x-api-key": apiKey, "anthropic-version": anthropicVersion || "2023-06-01" }
+          : { authorization: `Bearer ${apiKey}` }),
+      },
+      body: JSON.stringify({ model, messages, stream: true }),
+      signal,
+    });
+    if (!response.ok || !response.body) {
+      const text = await response.text().catch(() => "");
+      let payload = text;
+      try { payload = JSON.parse(text); } catch { /* retain exact vendor body */ }
+      throw new FloydApiError("POST", "/gateway", response.status, payload);
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true }).replace(/\r\n?/g, "\n");
+        const frames = buffer.split("\n\n");
+        buffer = frames.pop() || "";
+        for (const frame of frames) {
+          const type = frame.split("\n").find((line) => line.startsWith("event:"))?.slice(6).trim();
+          const raw = frame.split("\n").filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trimStart()).join("\n");
+          if ((type === "delta" || type === "done") && raw) yield { type, data: JSON.parse(raw) };
+        }
+      }
+    } finally {
+      await reader.cancel().catch(() => {});
+      reader.releaseLock();
+    }
+  }
+
   async *stream(path, { method = "GET", body, lastEventId, signal } = {}) {
     const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
       method,
