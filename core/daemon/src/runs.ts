@@ -93,13 +93,11 @@ async function gatePermissions(
             ? `kind ${kind} allowed inside leased worktree ${worktree}`
             : `kind ${kind} allowed by spec`;
         } else {
-          // Unlisted kinds stay PENDING for a human on any attached surface
-          // (session channel emits a `permission` event; steer endpoint answers).
-          appendEvidence(db, "policy.pending_surface_decision", "floyd-core", { request_id: reqId, kind }, {
-            run_id: scope.run_id,
-            job_id: scope.job_id,
-          });
-          continue;
+          // Unlisted kinds are NOT surfaced for a human decision: there is no
+          // human on the launchd-managed loopback path. Reject them deterministically
+          // so the run fails fast instead of hanging until waitIdle times out.
+          decision = "reject";
+          reason = `kind ${kind} not listed in agent spec policy — auto-rejected (no human surface available)`;
         }
         await engine.replyPermission(sessionID, reqId, decision);
         appendEvidence(db, "policy.decision", "floyd-core", { request_id: reqId, kind, decision, reason, raw: patterns }, {
@@ -127,6 +125,7 @@ async function runEngineTask(
     policy: PermissionPolicy;
     existingSessionId?: string | null;
     engineAgent?: string;
+    idleTimeoutMs?: number;
   },
 ): Promise<{ sessionID: string; transcript: unknown }> {
   let sessionID = opts.existingSessionId ?? null;
@@ -146,7 +145,7 @@ async function runEngineTask(
         run_id: opts.runId,
         job_id: opts.jobId,
       });
-      await engine.waitIdle(sessionID);
+      await engine.waitIdle(sessionID, opts.idleTimeoutMs ?? 600000);
     } finally {
       stop.done = true;
       await gate.catch(() => {});
@@ -171,7 +170,7 @@ async function runEngineTask(
           job_id: opts.jobId,
         });
       }
-      await engine.waitIdle(sessionID);
+      await engine.waitIdle(sessionID, opts.idleTimeoutMs ?? 600000);
     } finally {
       stop.done = true;
       await gate.catch(() => {});
@@ -305,16 +304,38 @@ export async function executeRun(db: Db, engine: OpenCodeEngine, runId: string):
     `Rules: work only inside the current directory. Do not push, do not change git config, do not touch anything outside this directory.`,
     `When the change is complete, ensure the project's tests pass (${String(project.test_command ?? "node --test")}).`,
   ].join("\n");
-  const { sessionID, transcript } = await runEngineTask(db, engine, {
-    runId,
-    jobId: builder.id,
-    directory: worktree,
-    worktree,
-    model: spec.model,
-    promptText: builderPrompt,
-    policy: spec.policy,
-    existingSessionId: builder.engine_session_id,
-  });
+  let sessionID: string;
+  let transcript: unknown;
+  try {
+    const res = await runEngineTask(db, engine, {
+      runId,
+      jobId: builder.id,
+      directory: worktree,
+      worktree,
+      model: spec.model,
+      promptText: builderPrompt,
+      policy: spec.policy,
+      existingSessionId: builder.engine_session_id,
+      // Fail fast when a permission is rejected or the engine stalls; do not
+      // hold the worktree lease for the full 600s default.
+      idleTimeoutMs: 120000,
+    });
+    sessionID = res.sessionID;
+    transcript = res.transcript;
+  } catch (err) {
+    const errText = err instanceof Error ? err.message : String(err);
+    appendEvidence(db, "engine.builder_failed", "floyd-core", { error: errText }, { run_id: runId, job_id: builder.id });
+    setJob(db, builder.id, { status: "failed", result_json: JSON.stringify({ error: errText }) });
+    if (leaseId) {
+      const lease = db.prepare(`SELECT * FROM leases WHERE id = ?`).get(leaseId) as Record<string, unknown> | undefined;
+      if (lease && String(lease.status) === "active") {
+        removeWorktree(repo, String(lease.resource_path));
+        releaseLease(db, leaseId);
+      }
+    }
+    setRun(db, runId, "failed");
+    throw err;
+  }
 
   const transcriptArt = putArtifact(db, JSON.stringify(transcript, null, 2), "application/json", "builder transcript");
   linkRunArtifact(db, runId, builder.id, transcriptArt, "transcript");

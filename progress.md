@@ -234,3 +234,18 @@
 - cross_surface_parity_test PASS (run_mrhxxxf41w95d6d8b67a): CLI surface started run, cockpit attached mid-run, observed live token stream (2287 frames), answered engine question que_f56eb378 -> yes, CLI observed same events (2366 frames) + run continued to gate, exactly one Core (launchd pid 85295).
 - Fix that got it green: cross-surface interactive primitive changed from permission-ask (flaky — builder's own in-worktree guardrail makes it refuse the external write, correctly) to a question (deterministic; the model reliably uses its question tool). Permission-grant-from-surface remains proven in objective1.py.
 - ALL FOUR OBJECTIVES COMPLETE. 33/33 unit tests, tsc clean, Core launchd-managed. docs/session-contract.md is the mobile-ready contract.
+
+### Cleanup pass — 2026-07-12 (post-Opus audit)
+
+A 2026-07-12 audit found a self-resurrecting `com.floyd.core` launchd daemon, a permission-hang landmine, run cleanup gaps, and repo/worktree litter. The following was executed with evidence:
+
+- **com.floyd.core neutralized**: `launchctl bootout gui/$(id -u)/com.floyd.core` + `kill 85351`; plist quarantined to `~/.floyd/quarantine/2026-07-12/Library/LaunchAgents/com.floyd.core.plist` (restore command in `.WHY.md`). Service absent from `launchctl list`; engine child absent from process table.
+- **Permission gate hardened**: `core/daemon/src/runs.ts` now rejects unlisted permission kinds deterministically instead of leaving them pending for a human surface that does not exist on the loopback launchd path. Evidence: `policy.decision` with `reject` + reason.
+- **Run failure cleanup**: `runEngineTask` accepts `idleTimeoutMs`; builder uses 120s timeout; `executeRun` catches failure, records `engine.builder_failed`, sets job `failed`, and removes the leased worktree + releases the lease.
+- **Verification**: `pnpm test` 33/33 pass; `pnpm typecheck` clean.
+- **Gateway token rotated**: `/Volumes/Storage/FLOYD_RUNTIME/core/gateway.token` regenerated; new SHA-256 differs from old.
+- **CLAUDE.md corrected**: repo-root `CLAUDE.md` no longer claims "golden path is implemented and runtime-verified" globally; it now states the golden path is partially implemented and verified only for the exercised builder→reviewer loop, with the not-yet-built surfaces listed.
+- **Orphaned worktrees/branches removed**: 12 `FLOYD_RUNTIME/worktrees/job_*` worktrees quarantined to `/Volumes/Storage/.floyd/quarantine/2026-07-12/FLOYD_RUNTIME/worktrees/`, `git worktree prune` cleared the registry, and 12 `floyd/job_*` branches in `scratch-calc` were deleted. Uncommitted diffs archived to `/Volumes/Storage/FLOYD_RUNTIME/artifacts/orphaned-worktree-diffs-2026-07-12/`.
+- **Intentional states documented (not changed)**:
+  - `/opt/homebrew/bin/opencode` points to `/Users/douglastalley/.opencode/bin/opencode` (stock 1.17.15). No `opencode-superfloyd` target exists on disk, so this symlink was left as-is and is noted here.
+  - `/Volumes/Storage/FLOYD_WORKSTATION/.supercache` is a symlink to `/Volumes/SanDisk1Tb/.supercache`. Current parity verified: both `VERSION` stamps read `1.7.2`. Cross-volume unmount risk remains; remediation (local copy or union mount) requires owner decision.
