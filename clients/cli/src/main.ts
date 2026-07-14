@@ -6,6 +6,7 @@
  */
 import { readFileSync } from "node:fs";
 import { FloydApiError, FloydClient } from "@floyd/sdk";
+import { parseAttachArguments } from "./attach-args.ts";
 
 const RUNTIME_ROOT = process.env.FLOYD_RUNTIME_ROOT ?? "/Volumes/Storage/FLOYD_RUNTIME";
 const CORE = `http://127.0.0.1:${process.env.FLOYD_CORE_PORT ?? 41414}`;
@@ -104,10 +105,15 @@ switch (cmd) {
     break;
   }
   case "attach": {
-    const [sessionId, lastId] = rest;
-    if (!sessionId) fail("usage: floyd attach <session_id> [last_event_id]");
-    console.error(`[attached to ${sessionId}${lastId ? ` resuming after seq ${lastId}` : ""} — ctrl-c to stop]`);
-    for await (const event of client.attachSession(sessionId, "douglas-cli", { lastEventId: lastId })) {
+    let attach: ReturnType<typeof parseAttachArguments>;
+    try {
+      attach = parseAttachArguments(rest);
+    } catch (error) {
+      fail(error instanceof Error ? error.message : String(error));
+    }
+    const { sessionId, lastEventId, runId } = attach;
+    console.error(`[attached to ${sessionId}${runId ? ` run ${runId}` : ""}${lastEventId ? ` resuming after seq ${lastEventId}` : ""} — ctrl-c to stop]`);
+    for await (const event of client.attachSession(sessionId, "douglas-cli", { lastEventId, runId })) {
       const e = event.data as Record<string, unknown>;
       if (event.type === "token") {
         const d = (e.data ?? {}) as Record<string, unknown>;
@@ -195,7 +201,7 @@ usage:
   floyd diff|tests|review <run_id> show run artifacts
   floyd accept|reject|escalate <run_id>
   floyd evidence [run_id]          evidence ledger
-  floyd attach <session> [seq]     live bidirectional channel (resume w/ seq)
+  floyd attach <session> [seq] [--run <run>]  run-scoped live channel
   floyd say <session> <text...>    steer the active turn
   floyd answer <session> <req> <label...>   answer a question event
   floyd grant|deny <session> <req> decide a permission event
