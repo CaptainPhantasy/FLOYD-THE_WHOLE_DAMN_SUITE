@@ -45,6 +45,7 @@ artifacts must belong to the active run.
 - `DELETE /api/devices/{id}`
 - `POST /api/handoffs`
 - `POST /api/handoffs/consume`
+- `POST /api/handoffs/pair`
 - `DELETE /api/handoffs/{id}`
 
 The initial canonical envelope ID is `primary`. The stream uses the envelope
@@ -79,23 +80,33 @@ capability, and resource allowlist. Tailscale is transport defense in depth,
 not application identity. Funnel/public exposure remains prohibited.
 
 Permanent device credentials exchange for a default health-only session.
-Consuming a handoff atomically issues a session whose scopes are the
+Native handoff consumption atomically issues a session whose scopes are the
 intersection of the device grant and handoff grant and whose resources are
-bound to the envelope's active project, session, run, and current artifacts.
+bound to an immutable snapshot of the envelope's active project, session, run,
+and current artifacts. Browser pairing instead consumes the one-time token at
+the exact configured private HTTPS origin, creates a transient device, and
+returns only a short-lived Secure, HttpOnly, SameSite=Strict session cookie.
+The enrollment secret and session token never enter browser JavaScript.
 Remote session attach/input requires an explicit bound run. Server-derived
 device attribution replaces any untrusted actor field. Revocation closes open
 SSE streams immediately; token expiry has its own stream termination timer.
 
-Handoff consumption is self-authenticating but requires all three factors in
-one request: the one-time handoff token, an enrolled device ID, and that
-device's enrollment secret. Core rate-limits this path and accepts only
-loopback or the exact private HTTPS origin. A token bound to an older envelope revision is rejected
-without being consumed.
+Native handoff consumption requires all three factors in one request: the
+one-time handoff token, an enrolled device ID, and that device's enrollment
+secret. Browser pairing treats the one-time bearer as its enrollment
+capability, is separately rate-limited, and accepts only the exact normalized
+private HTTPS origin. A lost browser-pair response can recover the same bounded
+session without minting a second identity. Closing or superseding the issuer's
+handoff revokes that recovery window even after the first successful pair.
 
-Sharp edges remain: the current revision binding makes handoffs brittle during
-active envelope edits; a browser still needs an HttpOnly same-site session or
-native secure-storage bridge; and the private HTTPS lifecycle has been proved
-from the host through its tailnet name, not yet from a second physical device.
+Sharp edges remain: a copied QR bearer can recover the shared session until the
+issuer revokes it or it expires; screenshots, camera rolls, extensions, and a
+compromised receiver can capture the fragment before it is scrubbed. Native
+clients still need platform-secure storage, and the private HTTPS lifecycle has
+been proved from the host through its tailnet name, not yet from a second
+physical device. QR issuance also fails closed when the local system
+`qrencode` binary is missing, incompatible, timed out, or returns disallowed
+SVG geometry.
 
 ## Completion boundary
 

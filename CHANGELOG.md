@@ -53,6 +53,23 @@
 - Model relay calls may use an opaque `floyd-connector:*` reference. Core
   resolves it server-side, binds it to the configured provider endpoint, and
   rejects ambiguous raw-secret plus reference requests.
+- All five copied presentation surfaces now negotiate and restore the portable
+  envelope. Desktop, IDE, and TUI restore durable Core transcripts; TerminalOne
+  and launcher remain explicit transport/presence surfaces and never infer
+  semantic state from shell bytes.
+- The IDE's Open Folder flow now propagates the host workspace to its terminal
+  and Floyd coding pane. Host Git/search remain explicitly disabled until real
+  host-backed adapters exist, preventing operations against the stale virtual
+  workspace.
+- TUI cursor publications are generation-guarded and coalesced rather than
+  producing an envelope revision for every token. Explicit initial input starts
+  a new task unless the operator supplies `--continue`.
+- TerminalOne launches a hash-pinned arm64 TUI artifact built from the admitted
+  copied commit. Relative overrides and fallback to the global direct-provider
+  `omp` binary are rejected.
+- Launcher browser shells now require a short-lived, single-use same-origin
+  WebSocket ticket before allocating a PTY. Its cold `npm test` owns server
+  startup, readiness, and shutdown instead of assuming port 11000 is prebound.
 
 ### Security
 
@@ -89,5 +106,5 @@
 ### Still incomplete
 
 - Native platform-secure client storage, physical second-device QR acceptance,
-  real-provider OAuth acceptance, and five-surface restore conformance remain
-  open until their direct runtime gates pass.
+  and real-provider OAuth acceptance remain open until their direct runtime
+  gates pass. Local five-surface restore conformance is now implemented.

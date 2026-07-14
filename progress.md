@@ -355,3 +355,35 @@ A 2026-07-12 audit found a self-resurrecting `com.floyd.core` launchd daemon, a 
 - The cockpit Settings control now renders provider, model, base URL, and password-key inputs and starts a normalized ephemeral model chat. Route metadata uses session storage; the provider key remains only in JavaScript memory and clears on reload/close. A 1440x900 Chrome render at `/private/tmp/floyd-model-routing.png` was inspected and showed the complete routing panel with no emoji.
 - Live CORS proof on Core PID `86166` returned 204 for `Origin: http://127.0.0.1:5173` with the exact gateway header allowlist and 403 for `Origin: https://evil.example`.
 - Boundary: durable coding runs still route through the supervised OpenCode engine. The raw completion relay does not replace OpenCode's coding tools, worktree lease, policy, or review lifecycle.
+
+## Portable experience completion — 2026-07-14
+
+- Added negotiate/restore/watch/optimistic-publish adapters to all five copied
+  surfaces. Desktop, IDE, and TUI restore durable Core transcripts; TerminalOne
+  and launcher publish presence only and never infer conversation state from
+  terminal bytes.
+- Corrected the IDE Open Folder split: the local host root now reaches the AI
+  pane and terminal. Browser Git/search explicitly report that host adapters
+  are unavailable rather than operating on the stale virtual workspace.
+- Desktop publications are serialized, stale SSE revisions are rejected, and
+  send/new/select cancels pending draft timers. IDE publications are queued and
+  transcript hydration is abortable and generation-guarded.
+- TUI cursor events are coalesced, run/epoch/generation guarded, and flushed at
+  detach/stop. An initial CLI message starts a new task unless `--continue` is
+  explicit.
+- Rejected a TerminalOne draft that would have invoked global `omp` and bypassed
+  Core. The copied TUI commit `92b395d64101ac66f0e7523058f0e3fe675babf8`
+  was compiled and admitted as `/Volumes/Storage/FLOYD_RUNTIME/bin/floyd-tui`,
+  SHA-256 `d0d330cf39237078e419625fd13a855297232c44bb6075f673c86a1b43fccf79`.
+  TerminalOne requires that absolute executable and has no PATH fallback.
+- Final copied commits: Desktop `7da081137bb6052e0c48086b6a700000a0cafcec`,
+  IDE `fb33ca8526a1ef14711e22673fae0c78cb0a3592`, TUI
+  `92b395d64101ac66f0e7523058f0e3fe675babf8`, TerminalOne
+  `4263cf60dc473d39a7451d32b7c8209be80d1493`, and launcher
+  `23d05f50e567e1774c12bd9d6d44a3bde50a2e69`.
+- Independent component verification passed: Desktop 10/10 plus build; IDE 7/7
+  plus typecheck/build; TUI 10/10 plus both package checks; TerminalOne full
+  unit/Core/smoke/feature/behavior/responsive suite; launcher focused adapter,
+  16/16 live harness, error-recovery, injection, respawn, and concurrency
+  suites. Launcher `npm test` now owns the dependent server lifecycle: it
+  starts a cold server, waits for readiness, runs the suites, and shuts it down.

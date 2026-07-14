@@ -6,17 +6,21 @@
 | Five local presentation surfaces | Shipped | Pinned clean intake commits |
 | Shared live session attach/steer | Shipped | Cross-surface parity PASS 6/6 |
 | Multi-provider completion relay | Shipped | Gateway tests and live loopback probe |
-| Portable experience envelope | In progress | Core/SDK/Cockpit and HTTP integration tests pass; five-surface runtime proof remains |
+| Portable experience envelope | Shipped | Core/SDK/Cockpit plus isolated five-client restore/conflict conformance |
 | SDK capability/version negotiation | Shipped | Typed/browser SDK plus accepted and HTTP 426 integration tests |
 | Encrypted device identity | In progress | AES-GCM/scrypt/revocation pass; paired browsers use a Secure HttpOnly session cookie, while native Keychain storage remains |
 | Deep-link and QR handoff | In progress | Private HTTPS fragment link, inert local SVG QR, independently mutable session snapshot, idempotently recoverable consume-once pairing, and cookie-auth tests pass; a physical second-device scan remains |
 | Private remote attach | In progress | Separate 41416 allowlisted listener and Tailscale HTTPS 8443 are live; scoped attach, out-of-bound denial, logout, and stream revocation pass, but a second physical tailnet-device proof remains |
 | Connector/OAuth authority | In progress | AES-GCM API-key/OAuth storage, PKCE, refresh/revoke, endpoint-bound relay references, SDK parity, and mock lifecycle tests pass; real-provider OAuth proof remains |
-| Unified single-surface experience | In progress | Cockpit envelope wiring underway; five-surface restore proof pending |
+| Five-surface local continuity | Preview baseline | Desktop, IDE, TUI, TerminalOne, and launcher commits are pinned for local developer testing; semantic/transport ownership is explicit |
+| Unified private remote experience | In progress | Cockpit QR/private attach is implemented; physical second-device proof and native secure storage remain |
 
 “Shipped” means direct implementation and named verification exist. “In
 progress” and “Not shipped” are deliberately visible so partial architecture is
 not presented as the completed ecosystem.
+
+Surface continuity boundaries and the difference from cross-vendor application
+federation are documented in `docs/SURFACE_CONTINUITY.md`.
 
 Connector authority operational boundaries:
 

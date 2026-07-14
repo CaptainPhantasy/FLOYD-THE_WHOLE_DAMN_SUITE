@@ -6,6 +6,7 @@ MANIFEST="$ROOT/ecosystem/surfaces.json"
 
 node --input-type=module - "$MANIFEST" <<'NODE'
 import { readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 
 const manifest = JSON.parse(await readFile(process.argv[2], "utf8"));
 const expected = ["desktop", "ide", "tui", "pty", "launcher"];
@@ -18,8 +19,23 @@ for (const surface of manifest.surfaces) {
   if (surface.direct_opencode_access !== false) throw new Error(`${surface.id}: direct OpenCode access is not prohibited`);
   if (!surface.integration?.commit) throw new Error(`${surface.id}: missing integration commit`);
   if (surface.integration.production_audit_vulnerabilities !== 0) throw new Error(`${surface.id}: production audit is not zero`);
+  const experience = surface.integration.experience;
+  if (!experience || experience.surface_id !== surface.id) throw new Error(`${surface.id}: missing Experience conformance`);
+  if (!experience.watch || !experience.automated_proof) throw new Error(`${surface.id}: Experience watch/proof incomplete`);
+  if (experience.optimistic_conflicts !== "preserve-409-no-blind-retry") throw new Error(`${surface.id}: unsafe conflict policy`);
   process.stdout.write(`${surface.id}\t${surface.intake_copy}\t${surface.integration.commit}\n`);
 }
+const tui = manifest.surfaces.find(surface => surface.id === "tui");
+const artifact = tui?.integration?.runtime_artifact;
+if (!artifact) throw new Error("tui: missing admitted runtime artifact");
+const bytes = await readFile(artifact.path);
+const digest = createHash("sha256").update(bytes).digest("hex");
+if (digest !== artifact.sha256) throw new Error(`tui: runtime artifact hash mismatch ${digest}`);
+const provenance = await readFile(artifact.provenance, "utf8");
+if (!provenance.includes(`source_commit=${tui.integration.commit}`) || !provenance.includes(`sha256=${digest}`)) {
+  throw new Error("tui: runtime artifact provenance mismatch");
+}
+process.stdout.write(`tui-runtime\t${artifact.path}\t${digest}\n`);
 NODE
 
 node --input-type=module <<'NODE'
