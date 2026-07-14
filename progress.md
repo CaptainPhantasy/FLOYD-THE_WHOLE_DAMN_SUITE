@@ -280,3 +280,14 @@ A 2026-07-12 audit found a self-resurrecting `com.floyd.core` launchd daemon, a 
 - Remote copies are clean at: desktop `68ba0642603b`, IDE `1bec2197aa14`, TUI `c5d2b231733b`, PTY `b3a4d90286fb`, ADK `c70c9b3d7c87`, mobile `f1da3eb9a43a`. Launcher is a `--no-local` clone at `30d6717483b6`.
 - Validation PASS: all seven worktrees clean; no symlink points to a protected donor path; launcher representative source/copy inode identities differ (`16777260:35863503` vs `16777260:47836049`).
 - First validator run exited 1 after cloning because it selected the donor's untracked `.DS_Store` as the inode probe; the clone correctly lacked that file. The script now selects a tracked path via `git ls-files`, and the complete rerun exited 0.
+
+## Desktop Core integration — 2026-07-14
+
+- Edited only the independent Desktop intake copy; the dirty original at `/Volumes/Storage/FloydDesktopWeb-v2` was not touched.
+- Added a pinned, zero-dependency `@floyd/sdk` snapshot and a server-side bridge. The browser calls `/api/core/health` and `/api/core/chat/stream`; the gateway token is read by the server and never enters browser state or URLs.
+- New-run submission and active-run steering go through Floyd Core. Core status/payload are preserved before stream headers; incoming abort or outgoing close aborts the SDK request, and the SDK generator cancels its reader in `finally`.
+- Replaced the direct-provider settings UI with a read-only runtime panel and removed rendered emoji glyphs. Legacy provider routes remain server-side for migration compatibility but are not reachable from the current pane.
+- Replaced `uuid` with Node `crypto.randomUUID()`. Updated Electron, Express, Puppeteer, and WebSocket dependencies plus narrowly scoped transitive overrides. Production audit moved from 13 advisories (including one critical) to zero; dev-only audit findings remain outside the production graph.
+- Build passed, Vitest passed 6/6, production audit found zero vulnerabilities, live Desktop `/api/core/health` returned HTTP 200 with Core and OpenCode healthy, and rendered Puppeteer proof showed the Core route, no provider-key UI, no emoji, and no page errors.
+- Live launch also exposed a donor crash on occupied MCP port 3005. The auxiliary port is now configurable and bind failure degrades only the Chrome extension bridge; Desktop stayed online during the repeated occupied-port proof.
+- Component commit `11015cf9f8dba2cb5dc81a16b4e131ea234140a0` pushed to `CaptainPhantasy/floyd-desktop-web-v2` branch `feat/floyd-core-runtime`.

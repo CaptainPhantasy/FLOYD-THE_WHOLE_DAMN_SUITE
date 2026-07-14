@@ -329,9 +329,10 @@ every item there is checked with evidence and blueprint gates A–H pass.
 - [x] Create and validate independent clean intake copies for all seven surfaces; launcher clone uses `--no-local` and has distinct source/copy inodes.
 - [ ] Admit independently writable copies of desktop, IDE, TUI, PTY, launcher, ADK, and mobile sources into their canonical targets.
 - [ ] Replace each admitted surface's direct backend/model ownership with `@floyd/sdk`.
+- [x] Route the Desktop coding pane through a server-side `@floyd/sdk` bridge, preserve Core errors, propagate aborts, remove provider-key UI and emoji, and record verified component commit `11015cf`.
 - [ ] Add launch, health, recovery, and cross-surface runtime acceptance receipts.
 - [ ] Publish verified logical commits to the whole-suite remote.
-- **Status:** in progress; foundational runtime/client boundary verified, surface admission not started.
+- **Status:** in progress; foundational runtime/client boundary and Desktop component integration verified. IDE, TUI, PTY, launcher, ADK, and mobile remain pending.
 
 ## Plan Maintenance
 
