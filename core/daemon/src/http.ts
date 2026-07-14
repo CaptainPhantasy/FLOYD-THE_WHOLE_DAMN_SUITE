@@ -38,6 +38,121 @@ import type {
 const COCKPIT_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "apps", "cockpit", "public");
 const BROWSER_SDK = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "packages", "sdk", "browser", "floyd-sdk.js");
 
+const SURFACE_HEALTH_TIMEOUT_MS = 1_500;
+const SURFACE_HEALTH_MAX_BYTES = 32 * 1024;
+const ADMITTED_SURFACES = Object.freeze([
+  {
+    id: "desktop",
+    target: "http://127.0.0.1:13010/",
+    healthUrl: "http://127.0.0.1:13010/api/health",
+    sourceRoot: "/Volumes/Storage/FLOYD_WORKSTATION/intake/surfaces/desktop",
+    sourceCommit: "521e8aa24e3bb3375444a6581e49e99d2f49e8ba",
+  },
+  {
+    id: "ide",
+    target: "http://127.0.0.1:13012/",
+    healthUrl: "http://127.0.0.1:13012/api/health",
+    sourceRoot: "/Volumes/Storage/FLOYD_WORKSTATION/intake/surfaces/ide",
+    sourceCommit: "6e974bdaa2e318d37bb6bc2aa9255f6f260fa516",
+  },
+  {
+    id: "pty",
+    target: "http://127.0.0.1:13013/",
+    healthUrl: "http://127.0.0.1:13013/health",
+    sourceRoot: "/Volumes/Storage/FLOYD_WORKSTATION/intake/surfaces/pty",
+    sourceCommit: "dcf96e53749613c4cc8d98b8a78773148f518e4d",
+  },
+  {
+    id: "launcher",
+    target: "http://127.0.0.1:13014/",
+    healthUrl: "http://127.0.0.1:13014/health",
+    sourceRoot: "/Volumes/Storage/FLOYD_WORKSTATION/intake/surfaces/launcher",
+    sourceCommit: "ec65bb18f35329781c04501d246cc80671d84269",
+  },
+]);
+
+type SurfaceHealthFetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+
+type GatewayDependencies = {
+  /** Test seam only. Callers cannot alter the fixed admitted URL registry. */
+  surfaceHealthFetch?: SurfaceHealthFetch;
+};
+
+async function boundedHealthJson(response: Response): Promise<Record<string, unknown>> {
+  const declaredLength = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declaredLength) && declaredLength > SURFACE_HEALTH_MAX_BYTES) {
+    await response.body?.cancel().catch(() => {});
+    throw new Error("surface health response exceeds limit");
+  }
+  if (!response.body) throw new Error("surface health response has no body");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let size = 0;
+  let text = "";
+  try {
+    while (true) {
+      const part = await reader.read();
+      if (part.done) break;
+      size += part.value.byteLength;
+      if (size > SURFACE_HEALTH_MAX_BYTES) throw new Error("surface health response exceeds limit");
+      text += decoder.decode(part.value, { stream: true });
+    }
+    text += decoder.decode();
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
+  const parsed: unknown = JSON.parse(text);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("surface health response is not an object");
+  return parsed as Record<string, unknown>;
+}
+
+async function probeAdmittedSurface(
+  surface: (typeof ADMITTED_SURFACES)[number],
+  fetchImpl: SurfaceHealthFetch,
+  requestSignal: AbortSignal,
+): Promise<Record<string, unknown>> {
+  const controller = new AbortController();
+  const relayAbort = () => controller.abort(requestSignal.reason ?? new Error("surface discovery client disconnected"));
+  if (requestSignal.aborted) relayAbort();
+  else requestSignal.addEventListener("abort", relayAbort, { once: true });
+  const timeout = setTimeout(() => controller.abort(new Error("surface health timeout")), SURFACE_HEALTH_TIMEOUT_MS);
+  timeout.unref();
+  try {
+    const response = await fetchImpl(surface.healthUrl, {
+      method: "GET",
+      cache: "no-store",
+      redirect: "error",
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => {});
+      return { id: surface.id, target: surface.target, verified: false, reason: `Health returned ${response.status}.` };
+    }
+    const health = await boundedHealthJson(response);
+    const identity = health.identity;
+    const verified = health.status === "ok"
+      && Boolean(identity && typeof identity === "object" && !Array.isArray(identity))
+      && (identity as Record<string, unknown>).surface_id === surface.id
+      && (identity as Record<string, unknown>).source_root === surface.sourceRoot
+      && (identity as Record<string, unknown>).source_commit === surface.sourceCommit;
+    return verified
+      ? { id: surface.id, target: surface.target, verified: true, reason: `Verified admitted copy ${surface.sourceCommit.slice(0, 8)}.` }
+      : { id: surface.id, target: surface.target, verified: false, reason: "Health responded without the required admitted source identity." };
+  } catch (error) {
+    const reason = requestSignal.aborted
+      ? "Surface discovery client disconnected."
+      : controller.signal.aborted ? "Identity check timed out." : "Identity check failed.";
+    return { id: surface.id, target: surface.target, verified: false, reason, error: error instanceof SyntaxError ? "invalid_json" : undefined };
+  } finally {
+    clearTimeout(timeout);
+    requestSignal.removeEventListener("abort", relayAbort);
+  }
+}
+
+async function discoverAdmittedSurfaces(fetchImpl: SurfaceHealthFetch, requestSignal: AbortSignal): Promise<Record<string, unknown>[]> {
+  return Promise.all(ADMITTED_SURFACES.map((surface) => probeAdmittedSurface(surface, fetchImpl, requestSignal)));
+}
+
 type SseClient = { res: ServerResponse; run_id?: string };
 const sseClients = new Set<SseClient>();
 
@@ -548,6 +663,7 @@ function createGateway(
   corePid: number,
   startedAt: string,
   boundary: "local" | "remote",
+  dependencies: GatewayDependencies = {},
 ): ReturnType<typeof createServer> {
   const token = gatewayToken();
   const selfAuthAttempts = new Map<string, { windowStarted: number; count: number }>();
@@ -686,6 +802,11 @@ function createGateway(
           now: nowIso(),
           engine: { ok: await engine.isHealthy(), url: engine.baseUrl, pid: engine.child?.pid ?? null },
         });
+      }
+      if (path === "/api/surfaces" && req.method === "GET") {
+        res.setHeader("cache-control", "no-store");
+        const surfaceHealthFetch = dependencies.surfaceHealthFetch ?? globalThis.fetch.bind(globalThis);
+        return send(res, 200, { surfaces: await discoverAdmittedSurfaces(surfaceHealthFetch, requestAbortSignal(req, res)) });
       }
       if (path === "/api/connectors" && req.method === "GET") {
         res.setHeader("cache-control", "no-store");
@@ -1465,8 +1586,14 @@ function createGateway(
   return server;
 }
 
-export function startGateway(db: Db, engine: OpenCodeEngine, corePid: number, startedAt: string): ReturnType<typeof createServer> {
-  return createGateway(db, engine, corePid, startedAt, "local");
+export function startGateway(
+  db: Db,
+  engine: OpenCodeEngine,
+  corePid: number,
+  startedAt: string,
+  dependencies: GatewayDependencies = {},
+): ReturnType<typeof createServer> {
+  return createGateway(db, engine, corePid, startedAt, "local", dependencies);
 }
 
 export function startRemoteGateway(db: Db, engine: OpenCodeEngine, corePid: number, startedAt: string): ReturnType<typeof createServer> {

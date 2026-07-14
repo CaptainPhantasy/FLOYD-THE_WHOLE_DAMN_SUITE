@@ -203,7 +203,7 @@
   <div class="handoff-body">
     <div class="handoff-qr"><img id="handoffQr" alt="Private handoff QR code"></div>
     <button class="action-button" id="copyHandoff" type="button">Copy private link</button>
-    <p class="handoff-note">Keep this window open until the other device pairs. Closing it revokes the link. The receiving page removes the secret from browser history before pairing.</p>
+    <p class="handoff-note">Keep this window open until the other device pairs. The Close button waits for Core to revoke the link. Page exit sends a best-effort authenticated revocation; if teardown interrupts it, the grant expires within two minutes. The receiving page removes the secret from browser history before pairing.</p>
   </div>
 </dialog>
 <dialog class="surface-dialog" id="surfaceDialog">
@@ -234,11 +234,11 @@ const actor = "douglas-cockpit";
 const surfaceId = "cockpit";
 const envelopeId = "primary";
 const FLOYD_SURFACES = Object.freeze([
-  { id: "desktop", name: "Floyd Desktop", kind: "url", target: "http://127.0.0.1:3001/", detail: "Full desktop coding partner. Restores the active Core run, transcript position, draft, artifact, and pending interaction state." },
-  { id: "ide", name: "Floyd IDE", kind: "url", target: "http://127.0.0.1:10001/", detail: "Browser IDE and folder workspace. Restores the Core workspace and active coding context." },
-  { id: "tui", name: "Floyd TUI", kind: "command", target: "/Volumes/Storage/FLOYD_RUNTIME/bin/floyd-tui", detail: "Canonical terminal coding partner. The generated command continues the active Core project and run." },
-  { id: "pty", name: "TerminalOne", kind: "url", target: "http://127.0.0.1:11001/", detail: "Web terminal transport. Its Floyd action starts the canonical TUI with the active Core project context." },
-  { id: "launcher", name: "Harness Launcher", kind: "url", target: "http://127.0.0.1:11000/", detail: "Local harness terminal. Its Floyd harness starts with Core-owned active context." },
+  { id: "desktop", name: "Floyd Desktop", kind: "url", target: "http://127.0.0.1:13010/", detail: "Admitted desktop copy. Open is enabled only after Core proves its source identity." },
+  { id: "ide", name: "Floyd IDE", kind: "url", target: "http://127.0.0.1:13012/", detail: "Admitted IDE copy and folder workspace. Open is provenance-gated." },
+  { id: "tui", name: "Floyd TUI continuity", kind: "command", target: "/Volumes/Storage/FLOYD_WORKSTATION/clients/cli/src/main.ts", detail: "The admitted TUI cannot yet pin an exact run. This fallback uses the Core CLI attach channel with explicit session, run, and event scope; it is not a semantic TUI launch." },
+  { id: "pty", name: "TerminalOne", kind: "url", target: "http://127.0.0.1:13013/", detail: "Admitted TerminalOne copy. Its run-scoped Floyd attach action remains distinct from a semantic TUI launch." },
+  { id: "launcher", name: "Harness Launcher", kind: "url", target: "http://127.0.0.1:13014/", detail: "Admitted Launcher copy with a run-scoped Core CLI attach action." },
 ]);
 
 const app = {
@@ -250,8 +250,11 @@ const app = {
   streamAbort: null,
   transcripts: new Map(),
   refreshTimer: null,
-  modelRoute: { provider: "opencode-go", model: "", baseUrl: "" },
+  modelRoute: { provider: "opencode-go", model: "", baseUrl: "", credentialRef: null },
   modelKey: "",
+  connectors: [],
+  surfaceAvailability: new Map(),
+  surfaceAbort: null,
   envelope: null,
   envelopeAbort: null,
   draftTimer: null,
@@ -262,7 +265,9 @@ const app = {
   cursorPending: null,
   restoringEnvelope: false,
   restoredArtifactId: null,
+  artifactAbort: null,
   snapshotParts: new Map(),
+  sessionEventKeys: new Map(),
   runSelectionGeneration: 0,
   activeContextPublish: Promise.resolve(),
   activeHandoffId: null,
@@ -422,7 +427,8 @@ function scheduleCursorSave(
   }, 500);
 }
 
-async function restoreEnvelope(envelope) {
+async function restoreEnvelope(envelope, { signal } = {}) {
+  if (signal?.aborted) return false;
   app.envelope = envelope;
   app.restoringEnvelope = true;
   try {
@@ -430,6 +436,7 @@ async function restoreEnvelope(envelope) {
       provider: envelope.model_route?.provider || "opencode-go",
       model: envelope.model_route?.model || "",
       baseUrl: envelope.model_route?.base_url || "",
+      credentialRef: envelope.model_route?.credential_ref || null,
     };
     if (document.activeElement !== el("prompt") && !app.draftBase) {
       app.draftLocalValue = envelope.composer_draft || "";
@@ -445,14 +452,35 @@ async function restoreEnvelope(envelope) {
     if (envelope.selected_view === "model-settings") renderModelSettings({ publish: false });
     if (envelope.selected_view === "artifact" && envelope.selected_artifact_id
       && envelope.selected_artifact_id !== app.restoredArtifactId && app.currentRunId) {
-      const content = await client.artifactById(envelope.selected_artifact_id);
-      addEntry(app.currentRunId, {
+      app.artifactAbort?.abort();
+      const artifactController = new AbortController();
+      app.artifactAbort = artifactController;
+      const relayAbort = () => artifactController.abort();
+      signal?.addEventListener("abort", relayAbort, { once: true });
+      const expectedArtifactId = envelope.selected_artifact_id;
+      const expectedRunId = app.currentRunId;
+      const expectedGeneration = app.runSelectionGeneration;
+      let content;
+      try {
+        content = await client.artifactById(expectedArtifactId, artifactController.signal);
+      } catch (error) {
+        if (artifactController.signal.aborted || signal?.aborted) return false;
+        throw error;
+      } finally {
+        signal?.removeEventListener("abort", relayAbort);
+        if (app.artifactAbort === artifactController) app.artifactAbort = null;
+      }
+      if (artifactController.signal.aborted || signal?.aborted
+        || expectedGeneration !== app.runSelectionGeneration || expectedRunId !== app.currentRunId
+        || app.envelope?.selected_artifact_id !== expectedArtifactId) return false;
+      addEntry(expectedRunId, {
         kind: "event",
-        title: `Artifact: ${shortId(envelope.selected_artifact_id)}`,
+        title: `Artifact: ${shortId(expectedArtifactId)}`,
         text: typeof content === "string" ? content : JSON.stringify(content, null, 2),
       });
-      app.restoredArtifactId = envelope.selected_artifact_id;
+      app.restoredArtifactId = expectedArtifactId;
     }
+    return true;
   } finally {
     app.restoringEnvelope = false;
   }
@@ -485,7 +513,7 @@ async function watchExperienceWithReconnect(controller) {
       })) {
         attempt = 0;
         if (event.type === "experience" && event.data?.revision > (app.envelope?.revision || 0)) {
-          await restoreEnvelope(event.data);
+          await restoreEnvelope(event.data, { signal: controller.signal });
         }
       }
       if (!controller.signal.aborted) throw new Error("Experience stream ended");
@@ -495,7 +523,7 @@ async function watchExperienceWithReconnect(controller) {
       await abortableDelay(experienceRetryDelay(attempt++), controller.signal);
       if (controller.signal.aborted) return;
       try {
-        await restoreEnvelope(await client.experience(envelopeId, controller.signal));
+        await restoreEnvelope(await client.experience(envelopeId, controller.signal), { signal: controller.signal });
       } catch (restoreError) {
         if (!controller.signal.aborted) notify(restoreError);
       }
@@ -587,6 +615,19 @@ function deduplicatedLiveText(runId, data) {
   }
   snapshot.delete(String(partId));
   return delta;
+}
+
+function sessionEventIsDuplicate(runId, event) {
+  const payload = event.data?.data ?? event.data ?? {};
+  const semanticId = payload.id ?? payload.request_id ?? payload.requestID;
+  const key = event.id ? `event:${event.id}` : semanticId ? `${event.type}:${semanticId}` : null;
+  if (!key) return false;
+  let keys = app.sessionEventKeys.get(runId);
+  if (!keys) { keys = new Set(); app.sessionEventKeys.set(runId, keys); }
+  if (keys.has(key)) return true;
+  keys.add(key);
+  if (keys.size > 2048) keys.delete(keys.values().next().value);
+  return false;
 }
 
 async function refreshHealth() {
@@ -705,6 +746,8 @@ async function renderInspector(expectedRunId = app.currentRunId, expectedGenerat
 
 function renderModelSettings({ publish = true } = {}) {
   const route = app.modelRoute;
+  const selectedConnector = app.connectors.find((profile) => profile.credentialRef === route.credentialRef)
+    || app.connectors.find((profile) => profile.id === route.connectorId);
   el("inspectStatus").textContent = "Model routing";
   el("inspectorBody").innerHTML = `
     <div class="inspect-section"><div class="inspect-label">Completion provider</div>
@@ -713,16 +756,95 @@ function renderModelSettings({ publish = true } = {}) {
       </select></label>
       <label class="settings-field"><span>Model</span><input id="modelName" value="${escapeHtml(route.model || "")}" placeholder="Provider model ID" autocomplete="off"></label>
       <label class="settings-field"><span>Base URL override</span><input id="modelBaseUrl" value="${escapeHtml(route.baseUrl || "")}" placeholder="Use provider default" autocomplete="off"></label>
-      <label class="settings-field"><span>API key</span><input id="modelApiKey" type="password" value="" placeholder="Held in memory only" autocomplete="off"></label>
-      <div class="settings-note">The key is not saved to localStorage, sessionStorage, Floyd evidence, or the run database. Closing or reloading this page clears it.</div>
+      <label class="settings-field"><span>Core connector</span><select id="modelConnector"><option value="">Ephemeral browser key</option>${app.connectors.filter((profile) => !profile.revoked).map((profile) => `<option value="${escapeHtml(profile.id)}" ${selectedConnector?.id === profile.id ? "selected" : ""}>${escapeHtml(profile.displayName)} / ${escapeHtml(profile.credentialKind || "no credential")}</option>`).join("")}</select></label>
+      <label class="settings-field"><span>API key</span><input id="modelApiKey" type="password" value="" placeholder="Enter for this chat or store in selected connector" autocomplete="off"></label>
+      <div class="settings-note">Ephemeral keys remain in page memory only. “Store in Core” sends the key once to Core encryption and retains only an opaque credential reference in this UI and the experience envelope.</div>
+      <div class="event-actions"><button class="action-button" type="button" data-connector-refresh>Refresh connectors</button><button class="action-button" type="button" data-connector-store-key ${selectedConnector ? "" : "disabled"}>Store in Core</button><button class="action-button" type="button" data-connector-oauth ${selectedConnector?.authorizationUrl ? "" : "disabled"}>Start OAuth</button><button class="action-button danger" type="button" data-connector-revoke ${selectedConnector ? "" : "disabled"}>Revoke</button></div>
+      <div class="settings-note">OAuth setup uses Core-held PKCE state and callback exchange. Configuration alone is not proof that a provider login works; only a successful callback stores an OAuth credential reference.</div>
       <button class="action-button primary" data-model-apply>Start model chat</button>
+    </div>
+    <div class="inspect-section"><div class="inspect-label">Create Core connector</div>
+      <label class="settings-field"><span>ID</span><input id="connectorId" placeholder="personal-openai" autocomplete="off"></label>
+      <label class="settings-field"><span>Display name</span><input id="connectorName" placeholder="Personal OpenAI" autocomplete="off"></label>
+      <label class="settings-field"><span>Provider</span><select id="connectorProvider">${["opencode-go", "opencode-zen", "openai", "anthropic"].map((value) => `<option value="${value}">${value}</option>`).join("")}</select></label>
+      <label class="settings-field"><span>Base URL</span><input id="connectorBaseUrl" placeholder="https://api.openai.com/v1" autocomplete="off"></label>
+      <label class="settings-field"><span>OAuth authorization URL (optional)</span><input id="connectorAuthorizationUrl" autocomplete="off"></label>
+      <label class="settings-field"><span>OAuth token URL (optional)</span><input id="connectorTokenUrl" autocomplete="off"></label>
+      <label class="settings-field"><span>OAuth client ID (required with OAuth URLs)</span><input id="connectorClientId" autocomplete="off"></label>
+      <label class="settings-field"><span>OAuth client secret (optional)</span><input id="connectorClientSecret" type="password" autocomplete="off"></label>
+      <label class="settings-field"><span>OAuth scopes (space separated)</span><input id="connectorScopes" autocomplete="off"></label>
+      <button class="action-button" type="button" data-connector-create>Create connector</button>
     </div>
     <div class="inspect-section"><div class="inspect-label">Routing boundary</div>
       <div class="inspect-row"><span>Browser</span><code>@floyd/sdk</code></div>
       <div class="inspect-row"><span>Relay</span><code>Core /gateway</code></div>
+      <div class="inspect-row"><span>Credential</span><code>${escapeHtml(route.credentialRef || "ephemeral")}</code></div>
       <div class="inspect-row"><span>Stream</span><code>delta / done</code></div>
     </div>`;
   if (publish && !app.restoringEnvelope) patchEnvelope({ selected_view: "model-settings" }).catch(notify);
+}
+
+async function refreshConnectors(preferredCredentialRef = app.modelRoute.credentialRef) {
+  const result = await client.connectors();
+  app.connectors = Array.isArray(result.connectors) ? result.connectors : [];
+  const profile = app.connectors.find((item) => item.credentialRef === preferredCredentialRef);
+  if (profile?.credentialRef) {
+    app.modelRoute = { ...app.modelRoute, provider: profile.provider, baseUrl: profile.baseUrl, credentialRef: profile.credentialRef, connectorId: profile.id };
+  }
+  return profile || null;
+}
+
+async function selectConnector(profile, credentialRef = profile?.credentialRef || null) {
+  if (!profile || !credentialRef) throw new Error("Selected connector does not have a stored credential.");
+  app.modelKey = "";
+  app.modelRoute = { ...app.modelRoute, provider: profile.provider, baseUrl: profile.baseUrl, credentialRef, connectorId: profile.id };
+  await patchEnvelope({
+    model_route: { provider: profile.provider, model: app.modelRoute.model || null, base_url: profile.baseUrl, provider_profile_id: null, credential_ref: credentialRef },
+  });
+}
+
+async function openModelSettings({ publish = true } = {}) {
+  renderModelSettings({ publish });
+  await refreshConnectors();
+  renderModelSettings({ publish: false });
+}
+
+function oauthCallbackInput(params) {
+  const state = params.get("state");
+  const code = params.get("code");
+  if (!state && !code) return null;
+  if (!state || !code) throw new Error("OAuth callback is incomplete; both state and code are required.");
+  return { state, code };
+}
+
+function connectorProfileInput(values) {
+  const input = {
+    id: values.id.trim(), displayName: values.displayName.trim(), provider: values.provider,
+    baseUrl: values.baseUrl.trim(),
+  };
+  const authorizationUrl = values.authorizationUrl.trim();
+  const tokenUrl = values.tokenUrl.trim();
+  const clientId = values.clientId.trim();
+  const clientSecret = values.clientSecret.trim();
+  const scopes = values.scopes.trim().split(/\s+/).filter(Boolean);
+  if (authorizationUrl || tokenUrl || clientId) {
+    Object.assign(input, { authorizationUrl, tokenUrl, clientId, scopes, clientAuth: clientSecret ? "client_secret_post" : "none" });
+    if (clientSecret) input.clientSecret = clientSecret;
+  }
+  return input;
+}
+
+async function completeOAuthCallback() {
+  const callback = oauthCallbackInput(query);
+  if (!callback) return false;
+  if (remoteMode) throw new Error("Connector OAuth callback requires the local authority surface.");
+  const result = await client.completeConnectorOAuth(callback.state, callback.code);
+  query.delete("state"); query.delete("code"); query.set("settings", "model");
+  history.replaceState({}, "", `${location.pathname}?${query.toString()}`);
+  const profile = await refreshConnectors(result.credentialRef);
+  if (!profile) throw new Error("Core stored the OAuth credential but its connector profile was not returned.");
+  await selectConnector(profile, result.credentialRef);
+  return true;
 }
 
 function shellQuote(value) {
@@ -738,9 +860,10 @@ function safeSurfaceUrl(surface) {
   return url.href;
 }
 
-function continuationCommand(project) {
-  if (!project?.id || !project?.root_path) return null;
-  return `cd -- ${shellQuote(project.root_path)} && ${shellQuote("/Volumes/Storage/FLOYD_RUNTIME/bin/floyd-tui")} floyd --project-id ${shellQuote(project.id)} --continue`;
+function continuationCommand(project, active) {
+  if (!project?.root_path || !active?.session_id || !active?.run_id) return null;
+  const cursor = active.last_event_id && /^\d+$/.test(String(active.last_event_id)) ? ` ${shellQuote(active.last_event_id)}` : "";
+  return `cd -- ${shellQuote(project.root_path)} && ${shellQuote("/usr/bin/env")} node ${shellQuote("/Volumes/Storage/FLOYD_WORKSTATION/clients/cli/src/main.ts")} attach ${shellQuote(active.session_id)}${cursor} --run ${shellQuote(active.run_id)}`;
 }
 
 function activeSurfaceProject() {
@@ -748,8 +871,39 @@ function activeSurfaceProject() {
   return app.state.projects.find((project) => project.id === projectId) || null;
 }
 
-function surfaceLaunchTarget(surface, project) {
-  return surface.kind === "command" ? continuationCommand(project) : safeSurfaceUrl(surface);
+function surfaceLaunchTarget(surface, project, active = app.envelope?.active) {
+  return surface.kind === "command" ? continuationCommand(project, { ...active, last_event_id: app.envelope?.last_event_id }) : safeSurfaceUrl(surface);
+}
+
+async function verifySurfaceTargets() {
+  app.surfaceAbort?.abort();
+  const controller = new AbortController();
+  app.surfaceAbort = controller;
+  const urlSurfaces = FLOYD_SURFACES.filter((surface) => surface.kind === "url");
+  if (remoteMode) {
+    for (const surface of urlSurfaces) app.surfaceAvailability.set(surface.id, { verified: false, reason: "Remote continuation cannot verify or open workstation loopback applications." });
+    if (app.surfaceAbort === controller) app.surfaceAbort = null;
+    if (el("surfaceDialog").open) renderSurfaceHub();
+    return;
+  }
+  try {
+    const discovery = await client.request("GET", "/api/surfaces", undefined, controller.signal);
+    if (controller.signal.aborted || app.surfaceAbort !== controller) return;
+    const results = Array.isArray(discovery?.surfaces) ? discovery.surfaces : [];
+    for (const surface of urlSurfaces) {
+      const result = results.find((entry) => entry?.id === surface.id && entry?.target === surface.target);
+      app.surfaceAvailability.set(surface.id, result
+        ? { verified: result.verified === true, reason: String(result.reason || "Core returned no verification reason.") }
+        : { verified: false, reason: "Core did not return the fixed admitted target identity." });
+    }
+  } catch (error) {
+    if (controller.signal.aborted) return;
+    for (const surface of urlSurfaces) app.surfaceAvailability.set(surface.id, { verified: false, reason: "Core surface discovery is unavailable." });
+    notify(error);
+  } finally {
+    if (app.surfaceAbort === controller) app.surfaceAbort = null;
+  }
+  if (el("surfaceDialog").open) renderSurfaceHub();
 }
 
 function renderSurfaceHub() {
@@ -758,30 +912,36 @@ function renderSurfaceHub() {
   const eventPosition = app.envelope?.last_event_id || app.envelope?.transcript_cursor || "not recorded";
   el("surfaceContext").innerHTML = `<strong>Core continuation envelope</strong><code>project ${escapeHtml(active.project_id || project?.id || "none")} / session ${escapeHtml(active.session_id || "none")} / run ${escapeHtml(active.run_id || "none")} / event ${escapeHtml(eventPosition)}</code>`;
   el("surfaceGrid").innerHTML = FLOYD_SURFACES.map((surface) => {
-    const target = surfaceLaunchTarget(surface, project);
+    const target = surfaceLaunchTarget(surface, project, active);
     const unavailable = !target;
+    const availability = app.surfaceAvailability.get(surface.id);
+    const verified = surface.kind === "url" && availability?.verified === true;
     return `<article class="surface-card" data-surface-id="${escapeHtml(surface.id)}">
       <h3>${escapeHtml(surface.name)}</h3><p>${escapeHtml(surface.detail)}</p>
-      <code class="surface-target">${escapeHtml(target || "Select an active project before generating the TUI continuation command.")}</code>
+      <code class="surface-target">${escapeHtml(target || "Select an active run before generating the exact CLI attach command.")}</code>
+      <div class="settings-note">${escapeHtml(surface.kind === "url" ? availability?.reason || "Checking admitted source identity." : "Run-scoped fallback only; admitted semantic TUI launch remains blocked.")}</div>
       <div class="surface-actions">
-        ${surface.kind === "url" ? `<button class="action-button primary" type="button" data-surface-open="${escapeHtml(surface.id)}">Open</button>` : ""}
+        ${surface.kind === "url" ? `<button class="action-button primary" type="button" data-surface-open="${escapeHtml(surface.id)}" ${verified ? "" : "disabled"}>Open verified copy</button>` : ""}
         <button class="action-button" type="button" data-surface-copy="${escapeHtml(surface.id)}" ${unavailable ? "disabled" : ""}>Copy ${surface.kind === "url" ? "address" : "command"}</button>
       </div>
     </article>`;
   }).join("");
   el("surfaceBoundary").textContent = remoteMode
-    ? "Remote boundary: loopback addresses open on this device, not on the workstation. Floyd Core restores admitted Floyd context after that surface connects; this does not federate third-party applications."
-    : "Local boundary: targets contain no credentials or run identifiers. Floyd Core remains the authority and restores context after the admitted surface connects; this does not federate third-party applications.";
+    ? "Remote boundary: Core surface probing and application launch are disabled because workstation loopback addresses do not refer to the remote device. Floyd continuity does not federate third-party applications."
+    : "Local boundary: donor ports are never targeted. Open stays disabled until health proves the admitted source root and commit; Floyd Core remains the continuity authority.";
 }
 
 function startModelChat() {
-  const provider = el("modelProvider").value;
   const model = el("modelName").value.trim();
-  const baseUrl = el("modelBaseUrl").value.trim();
   const apiKey = el("modelApiKey").value.trim();
-  if (!model || !apiKey) throw new Error("Model and API key are required.");
-  app.modelRoute = { provider, model, baseUrl };
-  app.modelKey = apiKey;
+  const connector = app.connectors.find((profile) => profile.id === el("modelConnector").value);
+  const provider = connector?.provider || el("modelProvider").value;
+  const baseUrl = connector?.baseUrl || el("modelBaseUrl").value.trim();
+  const credentialRef = connector?.credentialRef || app.modelRoute.credentialRef || null;
+  if (!model || (!apiKey && !credentialRef)) throw new Error("Model and either an ephemeral API key or stored Core connector are required.");
+  if (apiKey && credentialRef) throw new Error("Choose either the ephemeral API key or a stored Core connector, not both.");
+  app.modelRoute = { provider, model, baseUrl, credentialRef, connectorId: connector?.id || null };
+  app.modelKey = credentialRef ? "" : apiKey;
   app.streamAbort?.abort();
   clearPendingCursorSave();
   const selectionGeneration = ++app.runSelectionGeneration;
@@ -797,7 +957,7 @@ function startModelChat() {
     active: { project_id: null, session_id: null, run_id: null },
     transcript_cursor: 0,
     last_event_id: null,
-    model_route: { provider, model, base_url: baseUrl || null, provider_profile_id: null, credential_ref: null },
+    model_route: { provider, model, base_url: baseUrl || null, provider_profile_id: null, credential_ref: credentialRef },
     selected_view: "model-chat",
     composer_draft: "",
   }).catch(notify);
@@ -808,6 +968,7 @@ async function selectRun(runId, { publish = true } = {}) {
   const selectionGeneration = ++app.runSelectionGeneration;
   app.streamAbort?.abort();
   app.streamAbort = null;
+  app.artifactAbort?.abort();
   clearPendingCursorSave();
   app.modelKey = "";
   app.restoredArtifactId = null;
@@ -847,45 +1008,104 @@ function attachmentIsCurrent(controller, runId, sessionId, selectionGeneration) 
     && sessionId === app.currentSessionId;
 }
 
+async function refreshAttachmentContext(controller, runId, sessionId, selectionGeneration) {
+  const [envelope, run] = await Promise.all([
+    client.experience(envelopeId, controller.signal),
+    client.run(runId, controller.signal),
+  ]);
+  if (!attachmentIsCurrent(controller, runId, sessionId, selectionGeneration)) return null;
+  if (envelope.active?.run_id !== runId || envelope.active?.session_id !== sessionId) {
+    await refreshState();
+    await restoreEnvelope(envelope, { signal: controller.signal });
+    return null;
+  }
+  app.currentRun = run;
+  await restoreEnvelope(envelope, { signal: controller.signal });
+  if (!attachmentIsCurrent(controller, runId, sessionId, selectionGeneration)) return null;
+  renderRuns(); renderHeader();
+  return envelope;
+}
+
 function attachSession(runId, sessionId, selectionGeneration) {
   const controller = new AbortController();
   app.streamAbort = controller;
   void (async () => {
-    try {
-      for await (const event of client.attachSession(sessionId, actor, { signal: controller.signal, runId })) {
-        if (!attachmentIsCurrent(controller, runId, sessionId, selectionGeneration)) break;
-        if (event.type === "hello") {
-          const epoch = event.data?.stream_epoch;
-          if (epoch && epoch !== app.envelope?.transcript_epoch) {
-            await patchEnvelope({ transcript_epoch: epoch, transcript_cursor: 0, last_event_id: null });
+    let attempt = 0;
+    let streamEpoch = app.envelope?.transcript_epoch ?? null;
+    let lastEventId = app.snapshotParts.has(runId) ? app.envelope?.last_event_id ?? null : null;
+    let forceFresh = !app.snapshotParts.has(runId);
+    while (attachmentIsCurrent(controller, runId, sessionId, selectionGeneration)) {
+      try {
+        const resumeId = forceFresh ? undefined : lastEventId || undefined;
+        forceFresh = false;
+        let restartFresh = false;
+        for await (const event of client.attachSession(sessionId, actor, {
+          signal: controller.signal, runId, lastEventId: resumeId,
+        })) {
+          if (!attachmentIsCurrent(controller, runId, sessionId, selectionGeneration)) return;
+          if (event.type === "hello") {
+            const epoch = event.data?.stream_epoch ?? null;
+            if (epoch && epoch !== streamEpoch) {
+              streamEpoch = epoch;
+              lastEventId = null;
+              app.snapshotParts.delete(runId);
+              app.sessionEventKeys.delete(runId);
+              app.transcripts.delete(runId);
+              await patchEnvelope({ transcript_epoch: epoch, transcript_cursor: 0, last_event_id: null });
+              if (!attachmentIsCurrent(controller, runId, sessionId, selectionGeneration)) return;
+              if (resumeId) { restartFresh = true; break; }
+            }
+            attempt = 0;
+            continue;
           }
-          continue;
+          if (sessionEventIsDuplicate(runId, event)) continue;
+          if (event.id) {
+            lastEventId = String(event.id);
+            scheduleCursorSave(event.id, runId, streamEpoch);
+          }
+          if (event.type === "transcript") {
+            restoreTranscriptSnapshot(runId, event.data?.messages);
+            continue;
+          }
+          const payload = event.data || {};
+          const data = payload.data || {};
+          if (event.type === "token" && payload.channel === "text") {
+            const text = deduplicatedLiveText(runId, data);
+            if (text) addEntry(runId, { kind: "assistant-token", text });
+          } else if (event.type === "tool_call_start") {
+            addEntry(runId, { kind: "tool", title: "Tool started", text: String(data.tool ?? data.name ?? "tool"), id: event.id });
+          } else if (event.type === "tool_call_finish") {
+            addEntry(runId, { kind: "tool", title: "Tool finished", text: String(data.tool ?? data.name ?? "tool"), id: event.id });
+          } else if (event.type === "question") {
+            addEntry(runId, { kind: "question", data });
+          } else if (event.type === "permission") {
+            addEntry(runId, { kind: "permission", data });
+          } else if (["phase", "error", "done"].includes(event.type)) {
+            addEntry(runId, { kind: "event", title: event.type, text: JSON.stringify(data), id: event.id });
+          }
         }
-        if (event.type === "transcript") {
-          restoreTranscriptSnapshot(runId, event.data?.messages);
-          if (event.id) scheduleCursorSave(event.id, runId, app.envelope?.transcript_epoch ?? null);
-          continue;
-        }
-        if (event.id) scheduleCursorSave(event.id, runId, app.envelope?.transcript_epoch ?? null);
-        const payload = event.data || {};
-        const data = payload.data || {};
-        if (event.type === "token" && payload.channel === "text") {
-          const text = deduplicatedLiveText(runId, data);
-          if (text) addEntry(runId, { kind: "assistant-token", text });
-        } else if (event.type === "tool_call_start") {
-          addEntry(runId, { kind: "tool", title: "Tool started", text: String(data.tool ?? data.name ?? "tool"), id: event.id });
-        } else if (event.type === "tool_call_finish") {
-          addEntry(runId, { kind: "tool", title: "Tool finished", text: String(data.tool ?? data.name ?? "tool"), id: event.id });
-        } else if (event.type === "question") {
-          addEntry(runId, { kind: "question", data });
-        } else if (event.type === "permission") {
-          addEntry(runId, { kind: "permission", data });
-        } else if (["phase", "error", "done"].includes(event.type)) {
-          addEntry(runId, { kind: "event", title: event.type, text: JSON.stringify(data), id: event.id });
+        if (!attachmentIsCurrent(controller, runId, sessionId, selectionGeneration)) return;
+        if (restartFresh) { forceFresh = true; continue; }
+        throw new Error("Session stream ended");
+      } catch (error) {
+        if (!attachmentIsCurrent(controller, runId, sessionId, selectionGeneration)) return;
+        notify(error);
+        await abortableDelay(experienceRetryDelay(attempt++), controller.signal);
+        if (!attachmentIsCurrent(controller, runId, sessionId, selectionGeneration)) return;
+        try {
+          const envelope = await refreshAttachmentContext(controller, runId, sessionId, selectionGeneration);
+          if (!envelope) return;
+          if (envelope.transcript_epoch !== streamEpoch || !app.snapshotParts.has(runId)) {
+            streamEpoch = envelope.transcript_epoch ?? null;
+            lastEventId = null;
+            forceFresh = true;
+          } else {
+            lastEventId = lastEventId || envelope.last_event_id || null;
+          }
+        } catch (restoreError) {
+          if (attachmentIsCurrent(controller, runId, sessionId, selectionGeneration)) notify(restoreError);
         }
       }
-    } catch (error) {
-      if (!controller.signal.aborted) notify(error);
     }
   })();
 }
@@ -897,7 +1117,7 @@ async function sendPrompt() {
   el("send").disabled = true;
   try {
     if (app.mode === "model") {
-      if (!app.modelKey) throw new Error("Open model settings and enter the provider key again.");
+      if (!app.modelKey && !app.modelRoute.credentialRef) throw new Error("Open model settings and provide an ephemeral key or stored Core connector.");
       addEntry(app.currentRunId, { kind: "user", text });
       prompt.value = "";
       const controller = new AbortController();
@@ -907,7 +1127,8 @@ async function sendPrompt() {
         .map((entry) => ({ role: entry.kind, content: entry.text }));
       for await (const event of client.modelStream({
         provider: app.modelRoute.provider,
-        apiKey: app.modelKey,
+        apiKey: app.modelKey || undefined,
+        credentialRef: app.modelRoute.credentialRef || undefined,
         baseUrl: app.modelRoute.baseUrl || undefined,
         model: app.modelRoute.model,
         messages,
@@ -935,6 +1156,7 @@ async function sendPrompt() {
 function startNewTask({ publish = true } = {}) {
   if (remoteMode) { notify(new Error("Remote continuation cannot create a new run.")); return; }
   app.streamAbort?.abort();
+  app.artifactAbort?.abort();
   clearPendingCursorSave();
   const selectionGeneration = ++app.runSelectionGeneration;
   app.modelKey = "";
@@ -992,6 +1214,66 @@ el("inspectorBody").addEventListener("click", async (event) => {
     try { startModelChat(); } catch (error) { notify(error); }
     return;
   }
+  if (event.target.closest("[data-connector-refresh]")) {
+    try { await refreshConnectors(); renderModelSettings({ publish: false }); } catch (error) { notify(error); }
+    return;
+  }
+  if (event.target.closest("[data-connector-create]")) {
+    try {
+      const input = connectorProfileInput({
+        id: el("connectorId").value, displayName: el("connectorName").value,
+        provider: el("connectorProvider").value, baseUrl: el("connectorBaseUrl").value,
+        authorizationUrl: el("connectorAuthorizationUrl").value, tokenUrl: el("connectorTokenUrl").value,
+        clientId: el("connectorClientId").value, clientSecret: el("connectorClientSecret").value,
+        scopes: el("connectorScopes").value,
+      });
+      const created = await client.createConnector(input);
+      el("connectorClientSecret").value = "";
+      app.modelRoute = { ...app.modelRoute, connectorId: created.id, credentialRef: null, provider: created.provider, baseUrl: created.baseUrl };
+      await refreshConnectors(null);
+      renderModelSettings({ publish: false });
+    } catch (error) { notify(error); }
+    return;
+  }
+  if (event.target.closest("[data-connector-store-key]")) {
+    try {
+      const profile = app.connectors.find((item) => item.id === el("modelConnector").value);
+      const apiKey = el("modelApiKey").value.trim();
+      if (!profile || !apiKey) throw new Error("Select a connector and enter its API key.");
+      const stored = await client.storeConnectorApiKey(profile.id, apiKey);
+      el("modelApiKey").value = "";
+      await refreshConnectors(stored.credentialRef);
+      const refreshed = app.connectors.find((item) => item.id === profile.id);
+      await selectConnector(refreshed, stored.credentialRef);
+      renderModelSettings({ publish: false });
+    } catch (error) { notify(error); }
+    return;
+  }
+  if (event.target.closest("[data-connector-oauth]")) {
+    try {
+      const profile = app.connectors.find((item) => item.id === el("modelConnector").value);
+      if (!profile?.authorizationUrl) throw new Error("Selected connector is not configured for OAuth.");
+      const redirect = new URL(location.href);
+      redirect.hash = ""; redirect.search = "?settings=model";
+      const started = await client.startConnectorOAuth(profile.id, redirect.href, 300_000);
+      location.assign(started.authorizationUrl);
+    } catch (error) { notify(error); }
+    return;
+  }
+  if (event.target.closest("[data-connector-revoke]")) {
+    try {
+      const profile = app.connectors.find((item) => item.id === el("modelConnector").value);
+      if (!profile) throw new Error("Select a connector to revoke.");
+      await client.revokeConnector(profile.id);
+      if (app.modelRoute.credentialRef === profile.credentialRef) {
+        app.modelRoute = { ...app.modelRoute, credentialRef: null, connectorId: null };
+        await patchEnvelope({ model_route: { credential_ref: null } });
+      }
+      await refreshConnectors(null);
+      renderModelSettings({ publish: false });
+    } catch (error) { notify(error); }
+    return;
+  }
   const card = event.target.closest("[data-artifact-role]");
   if (!card || !app.currentRunId) return;
   try {
@@ -1003,6 +1285,21 @@ el("inspectorBody").addEventListener("click", async (event) => {
       app.restoredArtifactId = artifact.id;
       await patchEnvelope({ selected_artifact_id: artifact.id, selected_view: "artifact" });
     }
+  } catch (error) { notify(error); }
+});
+el("inspectorBody").addEventListener("change", async (event) => {
+  if (event.target.id !== "modelConnector") return;
+  try {
+    const profile = app.connectors.find((item) => item.id === event.target.value);
+    if (!profile) {
+      app.modelRoute = { ...app.modelRoute, credentialRef: null, connectorId: null };
+      await patchEnvelope({ model_route: { credential_ref: null } });
+    } else if (profile.credentialRef) {
+      await selectConnector(profile);
+    } else {
+      app.modelRoute = { ...app.modelRoute, connectorId: profile.id, credentialRef: null, provider: profile.provider, baseUrl: profile.baseUrl };
+    }
+    renderModelSettings({ publish: false });
   } catch (error) { notify(error); }
 });
 el("newTask").addEventListener("click", startNewTask);
@@ -1019,6 +1316,30 @@ async function clearActiveHandoff() {
   if (app.handoffObjectUrl) URL.revokeObjectURL(app.handoffObjectUrl);
   app.handoffObjectUrl = null;
   el("handoffQr").removeAttribute("src");
+}
+
+function bestEffortRevokeActiveHandoff(fetchImpl = globalThis.fetch.bind(globalThis)) {
+  const id = app.activeHandoffId;
+  if (!id) return null;
+  app.activeHandoffId = null;
+  app.activeHandoffLink = null;
+  const request = fetchImpl(`/api/handoffs/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    headers: { authorization: `Bearer ${token()}` },
+    credentials: "same-origin",
+    keepalive: true,
+  });
+  request.catch(() => {});
+  return request;
+}
+
+function teardownCockpit() {
+  app.streamAbort?.abort();
+  app.envelopeAbort?.abort();
+  app.artifactAbort?.abort();
+  app.surfaceAbort?.abort();
+  clearPendingCursorSave();
+  bestEffortRevokeActiveHandoff();
 }
 el("shareHandoff").addEventListener("click", async () => {
   if (remoteMode) return;
@@ -1050,7 +1371,7 @@ async function closeHandoff() {
 }
 el("closeHandoff").addEventListener("click", closeHandoff);
 el("handoffDialog").addEventListener("cancel", (event) => { event.preventDefault(); void closeHandoff(); });
-el("surfaceHub").addEventListener("click", () => { renderSurfaceHub(); el("surfaceDialog").showModal(); });
+el("surfaceHub").addEventListener("click", () => { renderSurfaceHub(); el("surfaceDialog").showModal(); void verifySurfaceTargets(); });
 el("closeSurfaceHub").addEventListener("click", () => el("surfaceDialog").close());
 el("surfaceDialog").addEventListener("cancel", (event) => { event.preventDefault(); el("surfaceDialog").close(); });
 el("surfaceGrid").addEventListener("click", async (event) => {
@@ -1063,11 +1384,14 @@ el("surfaceGrid").addEventListener("click", async (event) => {
   try {
     const target = surfaceLaunchTarget(surface, activeSurfaceProject());
     if (!target) throw new Error("Select an active project before opening the TUI continuation.");
-    if (openButton) window.open(target, "_blank", "noopener,noreferrer");
+    if (openButton) {
+      if (app.surfaceAvailability.get(surface.id)?.verified !== true) throw new Error("Open is disabled until admitted source identity is verified.");
+      window.open(target, "_blank", "noopener,noreferrer");
+    }
     else await navigator.clipboard.writeText(target);
   } catch (error) { notify(error); }
 });
-el("modelSettings").addEventListener("click", () => remoteMode ? notify(new Error("Provider settings require the local authority surface.")) : renderModelSettings());
+el("modelSettings").addEventListener("click", () => remoteMode ? notify(new Error("Provider settings require the local authority surface.")) : openModelSettings().catch(notify));
 el("modeButton").addEventListener("click", () => {
   if (remoteMode) return;
   if (app.mode === "model") { startNewTask(); return; }
@@ -1083,6 +1407,8 @@ el("prompt").addEventListener("input", (event) => scheduleDraftSave(event.target
 el("acceptRun").addEventListener("click", () => decide("accept"));
 el("rejectRun").addEventListener("click", () => decide("reject"));
 el("escalateRun").addEventListener("click", () => decide("escalate"));
+window.addEventListener("pagehide", teardownCockpit);
+window.addEventListener("beforeunload", teardownCockpit);
 
 setInterval(() => { el("clock").textContent = new Date().toLocaleTimeString(); }, 1000);
 setInterval(refreshHealth, 5000);
@@ -1109,7 +1435,8 @@ if (remoteMode && handoffToken) {
 await refreshHealth();
 await refreshState();
 try { await initializeExperience(); } catch (error) { if (token()) notify(error); }
-if (query.get("settings") === "model") renderModelSettings();
+try { await completeOAuthCallback(); } catch (error) { notify(error); }
+if (query.get("settings") === "model") openModelSettings().catch(notify);
 </script>
 </body>
 </html>

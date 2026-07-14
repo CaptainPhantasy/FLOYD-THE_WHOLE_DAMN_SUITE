@@ -67,7 +67,26 @@ const engine = {
   replyQuestion: async () => {},
   steer: async () => {},
 } as never;
-const server = startGateway(db, engine, process.pid, new Date().toISOString());
+const expectedSurfaceIdentity = new Map([
+  ["http://127.0.0.1:13010/api/health", { surface_id: "desktop", source_root: "/Volumes/Storage/FLOYD_WORKSTATION/intake/surfaces/desktop", source_commit: "521e8aa24e3bb3375444a6581e49e99d2f49e8ba" }],
+  ["http://127.0.0.1:13012/api/health", { surface_id: "ide", source_root: "/Volumes/Storage/FLOYD_WORKSTATION/intake/surfaces/ide", source_commit: "6e974bdaa2e318d37bb6bc2aa9255f6f260fa516" }],
+  ["http://127.0.0.1:13013/health", { surface_id: "pty", source_root: "/Volumes/Storage/FLOYD_WORKSTATION/intake/surfaces/pty", source_commit: "dcf96e53749613c4cc8d98b8a78773148f518e4d" }],
+  ["http://127.0.0.1:13014/health", { surface_id: "launcher", source_root: "/Volumes/Storage/FLOYD_WORKSTATION/intake/surfaces/launcher", source_commit: "ec65bb18f35329781c04501d246cc80671d84269" }],
+]);
+const observedSurfaceHealthUrls: string[] = [];
+let mismatchedSurfaceId: string | null = null;
+const surfaceHealthFetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+  const url = String(input);
+  observedSurfaceHealthUrls.push(url);
+  if (init?.signal?.aborted) throw init.signal.reason;
+  const identity = expectedSurfaceIdentity.get(url);
+  if (!identity) return new Response("not found", { status: 404 });
+  return Response.json({
+    status: "ok",
+    identity: identity.surface_id === mismatchedSurfaceId ? { ...identity, source_commit: "donor-or-stale-commit" } : identity,
+  });
+};
+const server = startGateway(db, engine, process.pid, new Date().toISOString(), { surfaceHealthFetch });
 const remoteServer = startRemoteGateway(db, engine, process.pid, new Date().toISOString());
 if (!server.listening) await once(server, "listening");
 if (!remoteServer.listening) await once(remoteServer, "listening");
@@ -129,6 +148,34 @@ test("run SSE writer destroys slow clients instead of buffering indefinitely", (
   } as never;
   assert.equal(writeRunEvent(response, "event: test\ndata: {}\n\n"), false);
   assert.match(destroyedWith?.message ?? "", /backpressure limit/);
+});
+
+test("Core surface discovery probes only fixed admitted URLs and fails closed on provenance mismatch", async () => {
+  observedSurfaceHealthUrls.length = 0;
+  mismatchedSurfaceId = null;
+  const response = await api("/api/surfaces?url=http://127.0.0.1:3001/api/health");
+  assert.equal(response.status, 200);
+  const body = await response.json() as { surfaces: Array<{ id: string; target: string; verified: boolean }> };
+  assert.deepEqual(body.surfaces.map(({ id, target, verified }) => ({ id, target, verified })), [
+    { id: "desktop", target: "http://127.0.0.1:13010/", verified: true },
+    { id: "ide", target: "http://127.0.0.1:13012/", verified: true },
+    { id: "pty", target: "http://127.0.0.1:13013/", verified: true },
+    { id: "launcher", target: "http://127.0.0.1:13014/", verified: true },
+  ]);
+  assert.deepEqual(observedSurfaceHealthUrls, [...expectedSurfaceIdentity.keys()]);
+  assert.equal(observedSurfaceHealthUrls.some((url) => url.includes(":3001")), false);
+  assert.match(response.headers.get("cache-control") ?? "", /no-store/);
+
+  mismatchedSurfaceId = "pty";
+  const mismatch = await api("/api/surfaces");
+  const mismatchBody = await mismatch.json() as { surfaces: Array<{ id: string; verified: boolean; reason: string }> };
+  assert.deepEqual(mismatchBody.surfaces.find(({ id }) => id === "pty"), {
+    id: "pty",
+    target: "http://127.0.0.1:13013/",
+    verified: false,
+    reason: "Health responded without the required admitted source identity.",
+  });
+  mismatchedSurfaceId = null;
 });
 
 test("HTTP experience integration negotiates, streams, updates, and preserves conflicts", async () => {
@@ -271,6 +318,7 @@ test("HTTP device and one-time handoff lifecycle returns the bound envelope", as
   assert.deepEqual(authenticatedBody.metadata, { surface: "test" });
   assert.deepEqual(authenticatedBody.session.scopes, ["health:read"]);
   assert.equal((await remoteApi("/api/health", authenticatedBody.session.token)).status, 200);
+  assert.equal((await remoteApi("/api/surfaces", authenticatedBody.session.token)).status, 403);
   assert.equal((await remoteApi("/api/state", authenticatedBody.session.token)).status, 403);
   assert.equal((await remoteApi("/api/experience/primary", authenticatedBody.session.token)).status, 403);
   assert.equal((await remoteApi("/api/connectors", authenticatedBody.session.token)).status, 403);

@@ -33,11 +33,12 @@ test("cockpit Surface Hub exposes exactly the five admitted Floyd surfaces", () 
   const surfaces = new Function(`${html.slice(start, end)}; return FLOYD_SURFACES;`)() as Array<Record<string, string>>;
   assert.deepEqual(surfaces.map(({ id }) => id), ["desktop", "ide", "tui", "pty", "launcher"]);
   assert.deepEqual(surfaces.filter(({ kind }) => kind === "url").map(({ target }) => target), [
-    "http://127.0.0.1:3001/",
-    "http://127.0.0.1:10001/",
-    "http://127.0.0.1:11001/",
-    "http://127.0.0.1:11000/",
+    "http://127.0.0.1:13010/",
+    "http://127.0.0.1:13012/",
+    "http://127.0.0.1:13013/",
+    "http://127.0.0.1:13014/",
   ]);
+  assert.doesNotMatch(html.slice(start, end), /127\.0\.0\.1:(?:3001|10001|11001|11000)/);
 });
 
 test("Surface Hub launch targets are credential-free and TUI continuation is shell-safe", () => {
@@ -47,29 +48,42 @@ test("Surface Hub launch targets are credential-free and TUI continuation is she
   const helpers = new Function(`${html.slice(start, end)}; return { shellQuote, safeSurfaceUrl, continuationCommand };`)() as {
     shellQuote: (value: string) => string;
     safeSurfaceUrl: (surface: Record<string, string>) => string;
-    continuationCommand: (project: { id: string; root_path: string } | null) => string | null;
+    continuationCommand: (
+      project: { id: string; root_path: string } | null,
+      active: { session_id?: string; run_id?: string; last_event_id?: string } | null,
+    ) => string | null;
   };
-  assert.equal(helpers.safeSurfaceUrl({ id: "ide", kind: "url", target: "http://127.0.0.1:10001/" }), "http://127.0.0.1:10001/");
+  assert.equal(helpers.safeSurfaceUrl({ id: "ide", kind: "url", target: "http://127.0.0.1:13012/" }), "http://127.0.0.1:13012/");
   for (const target of [
-    "https://127.0.0.1:10001/",
+    "https://127.0.0.1:13012/",
     "http://example.com/",
-    "http://user:secret@127.0.0.1:10001/",
-    "http://127.0.0.1:10001/?token=secret",
-    "http://127.0.0.1:10001/#run=run-1",
+    "http://user:secret@127.0.0.1:13012/",
+    "http://127.0.0.1:13012/?token=secret",
+    "http://127.0.0.1:13012/#run=run-1",
   ]) assert.throws(() => helpers.safeSurfaceUrl({ id: "bad", kind: "url", target }), /Unsafe launch target/);
-  const command = helpers.continuationCommand({ id: "project-'one", root_path: "/tmp/Floyd's work" });
-  assert.equal(command, "cd -- '/tmp/Floyd'\"'\"'s work' && '/Volumes/Storage/FLOYD_RUNTIME/bin/floyd-tui' floyd --project-id 'project-'\"'\"'one' --continue");
-  assert.equal(helpers.continuationCommand(null), null);
-  assert.doesNotMatch(command!, /(token|api[_-]?key|session[_-]?id|run[_-]?id|last[_-]?event)/i);
+  const command = helpers.continuationCommand(
+    { id: "project-'one", root_path: "/tmp/Floyd's work" },
+    { session_id: "session-'one", run_id: "run-1", last_event_id: "42" },
+  );
+  assert.equal(command, "cd -- '/tmp/Floyd'\"'\"'s work' && '/usr/bin/env' node '/Volumes/Storage/FLOYD_WORKSTATION/clients/cli/src/main.ts' attach 'session-'\"'\"'one' '42' --run 'run-1'");
+  assert.equal(helpers.continuationCommand(null, null), null);
+  assert.doesNotMatch(command!, /(token|api[_-]?key|credential|secret)/i);
+  assert.match(command!, /attach 'session-/);
+  assert.match(command!, /--run 'run-1'/);
 });
 
 test("Surface Hub reports Core-restored continuity and the honest remote loopback boundary", () => {
   assert.match(html, /Core continuation envelope/);
   assert.match(html, /app\.envelope\?\.active/);
   assert.match(html, /app\.envelope\?\.last_event_id/);
-  assert.match(html, /Floyd Core remains the authority and restores context/);
-  assert.match(html, /loopback addresses open on this device, not on the workstation/);
+  assert.match(html, /Floyd Core remains the continuity authority/);
+  assert.match(html, /workstation loopback addresses do not refer to the remote device/);
   assert.match(html, /does not federate third-party applications/);
+  assert.match(html, /client\.request\("GET", "\/api\/surfaces", undefined, controller\.signal\)/);
+  assert.match(html, /entry\?\.id === surface\.id && entry\?\.target === surface\.target/);
+  assert.match(html, /data-surface-open=/);
+  assert.match(html, /\$\{verified \? "" : "disabled"\}/);
+  assert.match(html, /surfaceAvailability\.get\(surface\.id\)\?\.verified !== true/);
   assert.match(html, /window\.open\(target, "_blank", "noopener,noreferrer"\)/);
   assert.doesNotMatch(html, /[?&#](token|secret|api_key|session_id|run_id|last_event_id)=/i);
 });
@@ -95,6 +109,8 @@ test("cockpit renders a local QR handoff without emoji or external image service
   assert.doesNotMatch(html, /handoffQr"\)\.innerHTML/);
   assert.doesNotMatch(html, /id="handoffLink"/);
   assert.doesNotMatch(html, /api\.qrserver|chart\.googleapis|quickchart/);
+  assert.match(html, /Page exit sends a best-effort authenticated revocation/);
+  assert.match(html, /grant expires within two minutes/);
 });
 
 test("cockpit exposes user-driven model routing without persisting provider keys", () => {
@@ -109,6 +125,49 @@ test("cockpit exposes user-driven model routing without persisting provider keys
   assert.doesNotMatch(html, /sessionStorage\.setItem\([^\n]*modelKey|localStorage\.setItem\([^\n]*modelKey/);
   assert.match(html, /location\.hash/);
   assert.doesNotMatch(html, /query\.get\("token"\)/);
+  assert.match(html, /client\.connectors\(\)/);
+  assert.match(html, /client\.createConnector\(input\)/);
+  assert.match(html, /client\.storeConnectorApiKey/);
+  assert.match(html, /client\.startConnectorOAuth/);
+  assert.match(html, /client\.completeConnectorOAuth/);
+  assert.match(html, /client\.revokeConnector/);
+  assert.match(html, /credentialRef: app\.modelRoute\.credentialRef/);
+  assert.match(html, /Configuration alone is not proof that a provider login works/);
+});
+
+test("cockpit connector selection publishes only opaque credential references", async () => {
+  const start = html.indexOf("async function selectConnector");
+  const end = html.indexOf("async function openModelSettings", start);
+  const patches: Array<Record<string, any>> = [];
+  const app = { modelKey: "raw-key-must-be-cleared", modelRoute: { model: "gpt-test" } };
+  const selectConnector = new Function("app", "patchEnvelope", `${html.slice(start, end)}; return selectConnector;`)(
+    app, async (patch: Record<string, unknown>) => { patches.push(patch); },
+  ) as (profile: Record<string, string>, credentialRef?: string) => Promise<void>;
+  await selectConnector({ id: "personal", provider: "openai", baseUrl: "https://api.openai.com/v1", credentialRef: "floyd-connector:personal" });
+  assert.equal(app.modelKey, "");
+  assert.equal((app.modelRoute as Record<string, unknown>).credentialRef, "floyd-connector:personal");
+  assert.equal(patches[0]?.model_route.credential_ref, "floyd-connector:personal");
+  assert.equal(JSON.stringify(patches).includes("raw-key-must-be-cleared"), false);
+});
+
+test("cockpit OAuth callback parsing fails closed and connector input keeps secrets out of storage", () => {
+  const inputStart = html.indexOf("function oauthCallbackInput");
+  const inputEnd = html.indexOf("async function completeOAuthCallback", inputStart);
+  const helpers = new Function(`${html.slice(inputStart, inputEnd)}; return { oauthCallbackInput, connectorProfileInput };`)() as {
+    oauthCallbackInput: (params: URLSearchParams) => { state: string; code: string } | null;
+    connectorProfileInput: (values: Record<string, string>) => Record<string, unknown>;
+  };
+  assert.equal(helpers.oauthCallbackInput(new URLSearchParams()), null);
+  assert.throws(() => helpers.oauthCallbackInput(new URLSearchParams("state=only")), /both state and code/);
+  assert.deepEqual(helpers.oauthCallbackInput(new URLSearchParams("state=s&code=c")), { state: "s", code: "c" });
+  const profile = helpers.connectorProfileInput({
+    id: " oauth-main ", displayName: " OAuth Main ", provider: "openai", baseUrl: " https://api.openai.com/v1 ",
+    authorizationUrl: "https://provider.example/authorize", tokenUrl: "https://provider.example/token",
+    clientId: "client", clientSecret: "profile-secret", scopes: "openid models",
+  });
+  assert.deepEqual(profile.scopes, ["openid", "models"]);
+  assert.equal(profile.clientAuth, "client_secret_post");
+  assert.doesNotMatch(html, /(sessionStorage|localStorage)\.setItem\([^\n]*(connector|credential|clientSecret|modelKey)/);
 });
 
 test("cockpit restores and publishes the portable Core experience envelope", () => {
@@ -400,6 +459,8 @@ test("cockpit drops buffered attach events after abort and run selection change"
     currentSessionId: "session-a",
     envelope: { transcript_epoch: "epoch-a" },
     streamAbort: null,
+    snapshotParts: new Map(),
+    sessionEventKeys: new Map(),
   };
   const attach = new Function(
     "app", "client", "actor", "patchEnvelope", "restoreTranscriptSnapshot", "scheduleCursorSave",
@@ -435,6 +496,148 @@ test("cockpit drops buffered attach events after abort and run selection change"
   assert.deepEqual(transcriptRestores, []);
   assert.deepEqual(cursors, []);
   assert.deepEqual(patches, []);
+});
+
+test("cockpit reconnects session attach from the last consumed event without duplicate tokens", async () => {
+  const start = html.indexOf("function attachmentIsCurrent");
+  const end = html.indexOf("async function sendPrompt", start);
+  const calls: Array<string | undefined> = [];
+  const tokens: string[] = [];
+  const cursors: string[] = [];
+  const notices: unknown[] = [];
+  const seen = new Set<string>();
+  const app: any = {
+    runSelectionGeneration: 1, currentRunId: "run-a", currentSessionId: "session-a",
+    currentRun: { id: "run-a" }, streamAbort: null,
+    envelope: { active: { run_id: "run-a", session_id: "session-a" }, transcript_epoch: "epoch-a", last_event_id: "7" },
+    snapshotParts: new Map([["run-a", new Map()]]), sessionEventKeys: new Map(),
+  };
+  let streamCall = 0;
+  const client = {
+    async *attachSession(_session: string, _actor: string, options: { lastEventId?: string }) {
+      calls.push(options.lastEventId); streamCall += 1;
+      yield { type: "hello", data: { stream_epoch: "epoch-a" } };
+      if (streamCall === 1) {
+        yield { id: "8", type: "token", data: { channel: "text", data: { delta: "A" } } };
+        throw new Error("transient");
+      }
+      yield { id: "8", type: "token", data: { channel: "text", data: { delta: "duplicate" } } };
+      yield { id: "9", type: "token", data: { channel: "text", data: { delta: "B" } } };
+      app.streamAbort.abort();
+    },
+    async experience() { return app.envelope; },
+    async run() { return { id: "run-a" }; },
+  };
+  const attach = new Function(
+    "app", "client", "actor", "patchEnvelope", "restoreEnvelope", "renderRuns", "renderHeader",
+    "restoreTranscriptSnapshot", "scheduleCursorSave", "deduplicatedLiveText", "sessionEventIsDuplicate",
+    "addEntry", "notify", "abortableDelay", "experienceRetryDelay", "envelopeId", "AbortController",
+    `${html.slice(start, end)}; return attachSession;`,
+  )(
+    app, client, "test", async () => {}, async () => {}, () => {}, () => {}, () => {},
+    (id: string) => cursors.push(id), (_run: string, data: any) => data.delta,
+    (_run: string, event: any) => event.id ? (seen.has(event.id) ? true : (seen.add(event.id), false)) : false,
+    (_run: string, entry: any) => tokens.push(entry.text), (error: unknown) => notices.push(error),
+    async () => {}, () => 0, "primary", AbortController,
+  ) as (runId: string, sessionId: string, generation: number) => void;
+  attach("run-a", "session-a", 1);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.deepEqual(calls, ["7", "8"]);
+  assert.deepEqual(tokens, ["A", "B"]);
+  assert.deepEqual(cursors, ["8", "9"]);
+  assert.equal(notices.length, 1);
+});
+
+test("cockpit discards a stale attach epoch and reconnects fresh for a durable transcript", async () => {
+  const start = html.indexOf("function attachmentIsCurrent");
+  const end = html.indexOf("async function sendPrompt", start);
+  const calls: Array<string | undefined> = [];
+  const snapshots: unknown[] = [];
+  const patches: Array<Record<string, unknown>> = [];
+  const app: any = {
+    runSelectionGeneration: 1, currentRunId: "run-a", currentSessionId: "session-a", currentRun: { id: "run-a" }, streamAbort: null,
+    envelope: { active: { run_id: "run-a", session_id: "session-a" }, transcript_epoch: "old", last_event_id: "7" },
+    snapshotParts: new Map([["run-a", new Map()]]), sessionEventKeys: new Map(), transcripts: new Map(),
+  };
+  let streamCall = 0;
+  const attach = new Function(
+    "app", "client", "actor", "patchEnvelope", "restoreEnvelope", "renderRuns", "renderHeader",
+    "restoreTranscriptSnapshot", "scheduleCursorSave", "deduplicatedLiveText", "sessionEventIsDuplicate",
+    "addEntry", "notify", "abortableDelay", "experienceRetryDelay", "envelopeId", "AbortController",
+    `${html.slice(start, end)}; return attachSession;`,
+  )(
+    app, {
+      async *attachSession(_session: string, _actor: string, options: { lastEventId?: string }) {
+        calls.push(options.lastEventId); streamCall += 1;
+        yield { type: "hello", data: { stream_epoch: "new" } };
+        if (streamCall === 2) { yield { id: "11", type: "transcript", data: { messages: ["durable"] } }; app.streamAbort.abort(); }
+      },
+    }, "test",
+    async (patch: Record<string, unknown>) => { patches.push(patch); app.envelope = { ...app.envelope, ...patch }; },
+    async () => {}, () => {}, () => {}, (_run: string, messages: unknown) => snapshots.push(messages),
+    () => {}, () => "", () => false, () => {}, () => {}, async () => {}, () => 0, "primary", AbortController,
+  ) as (runId: string, sessionId: string, generation: number) => void;
+  attach("run-a", "session-a", 1);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.deepEqual(calls, ["7", undefined]);
+  assert.deepEqual(patches, [{ transcript_epoch: "new", transcript_cursor: 0, last_event_id: null }]);
+  assert.deepEqual(snapshots, [["durable"]]);
+});
+
+test("cockpit artifact restoration aborts and discards stale run completions", async () => {
+  const start = html.indexOf("async function restoreEnvelope");
+  const end = html.indexOf("function experienceRetryDelay", start);
+  let resolveArtifact!: (value: string) => void;
+  const artifact = new Promise<string>((resolve) => { resolveArtifact = resolve; });
+  let artifactSignal: AbortSignal | undefined;
+  const entries: unknown[] = [];
+  const app = {
+    envelope: null, restoringEnvelope: false, modelRoute: {}, draftBase: null, draftLocalValue: "", draftDiverged: false,
+    currentRunId: "run-a", currentRun: { id: "run-a" }, state: { runs: [{ id: "run-a" }] },
+    restoredArtifactId: null, artifactAbort: null, runSelectionGeneration: 4,
+  };
+  const restore = new Function(
+    "app", "client", "document", "el", "selectRun", "startNewTask", "renderModelSettings", "addEntry", "shortId", "AbortController",
+    `${html.slice(start, end)}; return restoreEnvelope;`,
+  )(
+    app, { artifactById: (_id: string, signal: AbortSignal) => { artifactSignal = signal; return artifact; } },
+    { activeElement: null }, () => ({ value: "" }), async () => {}, () => {}, () => {}, (...args: unknown[]) => entries.push(args), (id: string) => id, AbortController,
+  ) as (envelope: Record<string, any>, options?: { signal?: AbortSignal }) => Promise<boolean>;
+  const restoring = restore({
+    model_route: {}, active: { run_id: "run-a" }, selected_view: "artifact", selected_artifact_id: "artifact-a", composer_draft: "",
+  });
+  app.runSelectionGeneration = 5; app.currentRunId = "run-b";
+  resolveArtifact("stale-content");
+  assert.equal(await restoring, false);
+  assert.ok(artifactSignal instanceof AbortSignal);
+  assert.deepEqual(entries, []);
+  assert.equal(app.restoredArtifactId, null);
+});
+
+test("cockpit teardown aborts streams and sends authenticated keepalive handoff revocation", async () => {
+  const start = html.indexOf("function bestEffortRevokeActiveHandoff");
+  const end = html.indexOf('el("shareHandoff")', start);
+  const calls: Array<{ url: string; options: Record<string, any> }> = [];
+  let aborts = 0;
+  const app: any = {
+    activeHandoffId: "handoff-a", activeHandoffLink: "private", streamAbort: { abort: () => { aborts += 1; } },
+    envelopeAbort: { abort: () => { aborts += 1; } }, artifactAbort: { abort: () => { aborts += 1; } },
+    surfaceAbort: { abort: () => { aborts += 1; } },
+  };
+  const helpers = new Function("app", "token", "clearPendingCursorSave", "globalThis", `${html.slice(start, end)}; return { bestEffortRevokeActiveHandoff, teardownCockpit };`)(
+    app, () => "gateway-token", () => {}, globalThis,
+  ) as { bestEffortRevokeActiveHandoff: (fetchImpl: Function) => Promise<unknown>; teardownCockpit: () => void };
+  await helpers.bestEffortRevokeActiveHandoff(async (url: string, options: Record<string, any>) => { calls.push({ url, options }); return {}; });
+  assert.equal(calls[0]?.url, "/api/handoffs/handoff-a");
+  assert.equal(calls[0]?.options.method, "DELETE");
+  assert.equal(calls[0]?.options.headers.authorization, "Bearer gateway-token");
+  assert.equal(calls[0]?.options.keepalive, true);
+  assert.equal(app.activeHandoffId, null);
+  app.activeHandoffId = null;
+  helpers.teardownCockpit();
+  assert.equal(aborts, 4);
+  assert.match(html, /window\.addEventListener\("pagehide", teardownCockpit\)/);
+  assert.match(html, /window\.addEventListener\("beforeunload", teardownCockpit\)/);
 });
 
 test("cockpit reconnects the experience watch with capped delay and a fresh restore", async () => {
