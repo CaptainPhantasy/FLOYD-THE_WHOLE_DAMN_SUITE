@@ -531,10 +531,17 @@ test("remote surface relays require a scoped device session, strip credentials, 
 
   let observedHeaders: Record<string, unknown> = {};
   let observedBody = "";
+  let slowResponseClosed = false;
   const upgradedSockets = new Set<import("node:stream").Duplex>();
   const upstream = createServer(async (req, res) => {
     observedHeaders = req.headers;
     for await (const chunk of req) observedBody += String(chunk);
+    if (req.url === "/slow") {
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.write("started");
+      res.once("close", () => { slowResponseClosed = true; });
+      return;
+    }
     res.writeHead(201, { "content-type": "application/json", "set-cookie": "upstream=must-not-escape" });
     res.end(JSON.stringify({ ok: true }));
   });
@@ -604,6 +611,18 @@ test("remote surface relays require a scoped device session, strip credentials, 
     while (!received.includes("relay-ws-probe")) received += String((await once(socket, "data"))[0]);
     assert.match(received, /relay-ws-probe/);
     socket.destroy();
+
+    const slow = await fetch(`${relayBase}/slow`, { headers: { authorization: `Bearer ${session.session.token}` } });
+    const slowReader = slow.body!.getReader();
+    assert.equal(new TextDecoder().decode((await slowReader.read()).value), "started");
+    const revoked = await remoteApi("/api/device-sessions/current", session.session.token, { method: "DELETE" });
+    assert.equal(revoked.status, 200);
+    const terminated = await Promise.race([
+      slowReader.read().then(({ done }) => done, () => true),
+      new Promise<false>((resolve) => setTimeout(() => resolve(false), 500)),
+    ]);
+    assert.equal(terminated, true);
+    assert.equal(slowResponseClosed, true);
   } finally {
     for (const socket of upgradedSockets) socket.destroy();
     for (const { server: relay } of relays) {

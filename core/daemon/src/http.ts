@@ -209,6 +209,7 @@ const experienceClients = new Set<ExperienceSseClient>();
 type RemotePrincipal = ReturnType<ExperienceSecurityService["authenticateDeviceSession"]>;
 const remoteStreams = new Map<string, Set<ServerResponse>>();
 const remoteSurfaceSockets = new Map<string, Set<Duplex>>();
+const remoteSurfaceRequests = new Map<string, Set<AbortController>>();
 
 function registerRemoteStream(res: ServerResponse, principal: RemotePrincipal): void {
   const current = remoteStreams.get(principal.sessionId) ?? new Set<ServerResponse>();
@@ -236,7 +237,29 @@ function closeRemoteStreams(sessionIds: readonly string[]): void {
     remoteStreams.delete(sessionId);
     for (const socket of remoteSurfaceSockets.get(sessionId) ?? []) socket.destroy(new Error("device session revoked"));
     remoteSurfaceSockets.delete(sessionId);
+    for (const controller of remoteSurfaceRequests.get(sessionId) ?? []) controller.abort(new Error("device session revoked"));
+    remoteSurfaceRequests.delete(sessionId);
   }
+}
+
+function registerRemoteSurfaceRequest(principal: RemotePrincipal): { controller: AbortController; finish: () => void } {
+  const requests = remoteSurfaceRequests.get(principal.sessionId) ?? new Set<AbortController>();
+  if (requests.size >= 16) throw new ExperienceSecurityError("scope_denied", "device session remote request limit exceeded", 429);
+  const controller = new AbortController();
+  requests.add(controller);
+  remoteSurfaceRequests.set(principal.sessionId, requests);
+  const expiry = setTimeout(() => controller.abort(new Error("device session expired")), Math.max(1, Date.parse(principal.expiresAt) - Date.now()));
+  expiry.unref();
+  let finished = false;
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    clearTimeout(expiry);
+    requests.delete(controller);
+    if (requests.size === 0) remoteSurfaceRequests.delete(principal.sessionId);
+  };
+  controller.signal.addEventListener("abort", finish, { once: true });
+  return { controller, finish };
 }
 
 function registerRemoteSurfaceSocket(socket: Duplex, principal: RemotePrincipal): void {
@@ -1805,12 +1828,14 @@ export function startRemoteSurfaceGateways(
 
     const server = createServer(async (req, res) => {
       let principal: RemotePrincipal;
+      let lifecycle: ReturnType<typeof registerRemoteSurfaceRequest>;
       try {
         principal = authenticate(req);
         if (!["GET", "HEAD", "OPTIONS"].includes(req.method ?? "") && !req.headers.authorization && !exactRelayOrigin(req, surface)) {
           throw new ExperienceSecurityError("scope_denied", "remote surface mutation requires its exact browser Origin", 403);
         }
         await verifySurface(surface);
+        lifecycle = registerRemoteSurfaceRequest(principal);
       } catch (error) {
         const status = error instanceof ExperienceSecurityError ? error.httpStatus : 503;
         return send(res, status, {
@@ -1828,24 +1853,25 @@ export function startRemoteSurfaceGateways(
         headers: relayRequestHeaders(req.headers, upstream),
       });
       let settled = false;
+      lifecycle.controller.signal.addEventListener("abort", () => upstreamRequest.destroy(lifecycle.controller.signal.reason), { once: true });
       const abort = () => {
-        if (!settled) upstreamRequest.destroy(new Error("remote surface client disconnected"));
+        if (!settled) lifecycle.controller.abort(new Error("remote surface client disconnected"));
       };
       req.once("aborted", abort);
       res.once("close", abort);
       upstreamRequest.once("response", (upstreamResponse) => {
         res.writeHead(upstreamResponse.statusCode ?? 502, relayResponseHeaders(upstreamResponse.headers, surface, upstream));
         upstreamResponse.once("error", (error) => res.destroy(error));
-        upstreamResponse.once("end", () => { settled = true; });
+        upstreamResponse.once("end", () => { settled = true; lifecycle.finish(); });
         upstreamResponse.pipe(res);
       });
       upstreamRequest.once("error", (error) => {
         settled = true;
+        lifecycle.finish();
         if (!res.headersSent) send(res, 502, { error: "surface_upstream_failed", message: error.message });
         else res.destroy(error);
       });
       req.pipe(upstreamRequest);
-      void principal;
     });
 
     server.on("upgrade", (req, socket, head) => {
