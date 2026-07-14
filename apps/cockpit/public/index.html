@@ -974,17 +974,15 @@ async function unloadIntegratedSurfaceFrame() {
   const frame = el("surfaceFrame");
   if (!frame.src || frame.src === "about:blank") return;
   if (["pty", "launcher", "tui"].includes(app.integratedSurfaceId)) {
-    try {
-      const childOrigin = new URL(frame.src).origin;
-      // Terminal surfaces acknowledge that they issued their explicit PTY
-      // teardown before Floyd removes the browsing context. A timeout remains
-      // bounded for a frame that never finished loading; live verification
-      // separately proves that server-side session cleanup reached zero.
-      const acknowledged = await requestIntegratedSurfaceClose(frame, childOrigin);
-      if (!acknowledged) {
-        throw new Error("The terminal did not acknowledge PTY teardown; Floyd kept it visible instead of detaching a hidden session.");
-      }
-    } catch { /* a malformed or already-reset frame is simply unloaded */ }
+    const childOrigin = new URL(frame.src).origin;
+    // Terminal surfaces acknowledge that they issued their explicit PTY
+    // teardown before Floyd removes the browsing context. A timeout remains
+    // bounded for a frame that never finished loading; live verification
+    // separately proves that server-side session cleanup reached zero.
+    const acknowledged = await requestIntegratedSurfaceClose(frame, childOrigin);
+    if (!acknowledged) {
+      throw new Error("The terminal did not acknowledge PTY teardown; Floyd kept it visible instead of detaching a hidden session.");
+    }
   }
   frame.src = "about:blank";
   app.integratedSurfaceId = null;

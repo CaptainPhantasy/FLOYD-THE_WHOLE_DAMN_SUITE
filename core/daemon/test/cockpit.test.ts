@@ -103,6 +103,9 @@ test("Surface Hub reports Core-restored continuity and the honest remote loopbac
   assert.match(html, /\["pty", "launcher", "tui"\]\.includes\(app\.integratedSurfaceId\)/);
   assert.match(html, /if \(!acknowledged\)[\s\S]*kept it visible instead of detaching a hidden session/);
   assert.match(html, /frame\.src = "about:blank"/);
+  const terminalTeardown = html.match(/if \(\["pty", "launcher", "tui"\]\.includes\(app\.integratedSurfaceId\)\)[\s\S]*?\n  }\n  frame\.src = "about:blank"/);
+  assert.ok(terminalTeardown, "terminal teardown block is present");
+  assert.doesNotMatch(terminalTeardown[0], /catch/, "a missing acknowledgement cannot be swallowed before frame unload");
   assert.match(html, /window\.open\(target, "_blank", "noopener,noreferrer"\)/);
   assert.doesNotMatch(html, /[?&#](token|secret|api_key|session_id|run_id|last_event_id)=/i);
 });
