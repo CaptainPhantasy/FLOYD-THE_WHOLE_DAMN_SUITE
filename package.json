@@ -8,8 +8,8 @@
     "node": ">=26"
   },
   "scripts": {
-    "typecheck": "tsc -b packages/contracts core/daemon clients/cli",
-    "test": "node --test \"core/daemon/test/*.test.ts\"",
+    "typecheck": "tsc -b packages/contracts packages/sdk engines/opencode core/daemon clients/cli",
+    "test": "node --test \"packages/sdk/test/*.test.ts\" \"engines/opencode/test/*.test.ts\" \"core/daemon/test/*.test.ts\"",
     "core": "node core/daemon/src/main.ts",
     "cli": "node clients/cli/src/main.ts"
   },

@@ -5,5 +5,8 @@
   "type": "module",
   "bin": {
     "floyd": "./src/main.ts"
+  },
+  "dependencies": {
+    "@floyd/sdk": "workspace:*"
   }
 }

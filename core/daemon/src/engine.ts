@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync, openSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { OpenCodeSdkRuntime } from "@floyd/opencode-runtime";
 import { PATHS, ENGINE_PORT, LOOPBACK, readUpstreamLock, RUNTIME_ROOT } from "./config.ts";
 import { newestMessage, isTerminalAssistant, containsAssistantTurn } from "./engine-logic.ts";
 
@@ -18,6 +19,7 @@ import { newestMessage, isTerminalAssistant, containsAssistantTurn } from "./eng
 export class OpenCodeEngine {
   child: ChildProcess | null = null;
   readonly baseUrl = `http://${LOOPBACK}:${ENGINE_PORT}`;
+  private readonly runtime = new OpenCodeSdkRuntime({ baseUrl: this.baseUrl });
 
   verifyBinary(): { path: string; version: string; sha256: string } {
     const lock = readUpstreamLock().opencode;
@@ -83,7 +85,7 @@ export class OpenCodeEngine {
       OPENCODE_CONFIG: PATHS.engineConfig,
       OPENCODE_DISABLE_AUTOUPDATE: "1",
       FLOYD_GLM_API_KEY: key,
-      // 1.17.15 gates model availability on integration connections; the zai
+      // The pinned 1.17.x engine gates model availability on integration connections; the zai
       // integrations declare an env method via ZHIPU_API_KEY (verified live via
       // GET /api/integration). Env-only: the key never touches disk.
       ZHIPU_API_KEY: key,
@@ -106,8 +108,7 @@ export class OpenCodeEngine {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       try {
-        const r = await fetch(`${this.baseUrl}/api/health`, { signal: AbortSignal.timeout(2000) });
-        if (r.ok) return;
+        if (await this.runtime.health(AbortSignal.timeout(2000))) return;
       } catch { /* not up yet */ }
       await new Promise((res) => setTimeout(res, 400));
     }
@@ -116,8 +117,7 @@ export class OpenCodeEngine {
 
   async isHealthy(): Promise<boolean> {
     try {
-      const r = await fetch(`${this.baseUrl}/api/health`, { signal: AbortSignal.timeout(1500) });
-      return r.ok;
+      return await this.runtime.health(AbortSignal.timeout(1500));
     } catch {
       return false;
     }
@@ -134,46 +134,17 @@ export class OpenCodeEngine {
     this.child = null;
   }
 
-  // ---------- REST adapter (verified against live 1.17.15 /doc this session) ----------
-
-  private async api(method: string, path: string, body?: unknown): Promise<unknown> {
-    const r = await fetch(`${this.baseUrl}${path}`, {
-      method,
-      headers: body !== undefined ? { "content-type": "application/json" } : {},
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-      signal: AbortSignal.timeout(path.endsWith("/wait") ? 600000 : 30000),
-    });
-    if (!r.ok) {
-      const text = await r.text().catch(() => "");
-      throw new Error(`engine ${method} ${path} -> ${r.status} ${text.slice(0, 300)}`);
-    }
-    const ct = r.headers.get("content-type") ?? "";
-    if (!ct.includes("json")) return r.text();
-    const json = (await r.json()) as unknown;
-    // 1.17.15 wraps payloads in a {data: ...} envelope (verified live this session)
-    if (json && typeof json === "object" && "data" in (json as Record<string, unknown>)) {
-      return (json as Record<string, unknown>).data;
-    }
-    return json;
-  }
-
   async createSession(directory: string, providerID: string, modelID: string, agent?: string): Promise<string> {
-    const res = (await this.api("POST", "/api/session", {
-      location: { directory },
-      model: { providerID, id: modelID },
-      ...(agent ? { agent } : {}),
-    })) as { id: string };
-    if (!res.id) throw new Error("engine session create returned no id");
-    return res.id;
+    return this.runtime.createSession(directory, providerID, modelID, agent);
   }
 
   async prompt(sessionID: string, text: string): Promise<void> {
-    await this.api("POST", `/api/session/${sessionID}/prompt`, { prompt: { text } });
+    await this.runtime.prompt(sessionID, text);
   }
 
-  /** Mid-run steer: injects guidance into the active turn (1.17.15 delivery enum: steer|queue). */
+  /** Mid-run steer through the official SDK delivery enum: steer | queue. */
   async steer(sessionID: string, text: string): Promise<void> {
-    await this.api("POST", `/api/session/${sessionID}/prompt`, { prompt: { text }, delivery: "steer" });
+    await this.runtime.steer(sessionID, text);
   }
 
   /**
@@ -181,39 +152,11 @@ export class OpenCodeEngine {
    * backoff until stop() flips. Each parsed JSON frame is passed to onEvent.
    */
   subscribeEvents(onEvent: (evt: unknown) => void): { stop: () => void } {
-    let stopped = false;
-    const run = async () => {
-      while (!stopped) {
-        try {
-          // /api/event is the live bus in 1.17.15; bare /event only emits heartbeats (verified live)
-          const res = await fetch(`${this.baseUrl}/api/event`, { signal: AbortSignal.timeout(86400000) });
-          if (!res.ok || !res.body) throw new Error(`event stream ${res.status}`);
-          const reader = res.body.getReader();
-          const decoder = new TextDecoder();
-          let buf = "";
-          while (!stopped) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            buf += decoder.decode(value, { stream: true });
-            const lines = buf.split("\n");
-            buf = lines.pop() ?? "";
-            for (const line of lines) {
-              if (!line.startsWith("data:")) continue;
-              try {
-                onEvent(JSON.parse(line.slice(5).trim()));
-              } catch { /* non-JSON frame */ }
-            }
-          }
-        } catch { /* engine restarting; retry */ }
-        if (!stopped) await new Promise((r) => setTimeout(r, 1500));
-      }
-    };
-    void run();
-    return { stop: () => { stopped = true; } };
+    return this.runtime.subscribeEvents(onEvent);
   }
 
   async setSessionModel(sessionID: string, providerID: string, modelID: string): Promise<void> {
-    await this.api("POST", `/api/session/${sessionID}/model`, { model: { providerID, id: modelID } });
+    await this.runtime.switchModel(sessionID, providerID, modelID);
   }
 
   /** True when the session has at least one assistant turn (i.e. work actually ran). */
@@ -224,7 +167,7 @@ export class OpenCodeEngine {
 
   /**
    * Blocks until the session goes idle. POST /wait returns 503 "not available
-   * yet" in 1.17.15 (verified live), so idle = the newest message is a
+   * yet" in the original 1.17.15 seam proof, so idle = the newest message is a
    * completed assistant message, no pending permission requests, stable for
    * three consecutive polls. Throws if the final assistant turn errored.
    */
@@ -236,7 +179,7 @@ export class OpenCodeEngine {
       await new Promise((r) => setTimeout(r, 3000));
       let msgs: Array<Record<string, unknown>>;
       try {
-        msgs = (await this.api("GET", `/api/session/${sessionID}/message`)) as Array<Record<string, unknown>>;
+        msgs = await this.messages(sessionID) as Array<Record<string, unknown>>;
       } catch {
         continue;
       }
@@ -268,27 +211,23 @@ export class OpenCodeEngine {
   }
 
   async pendingPermissions(sessionID: string): Promise<Array<Record<string, unknown>>> {
-    const res = (await this.api("GET", `/api/session/${sessionID}/permission`)) as
-      | Array<Record<string, unknown>>
-      | null;
-    return Array.isArray(res) ? res : [];
+    return this.runtime.pendingPermissions(sessionID);
   }
 
   async replyPermission(sessionID: string, requestID: string, reply: "once" | "always" | "reject"): Promise<void> {
-    await this.api("POST", `/api/session/${sessionID}/permission/${requestID}/reply`, { reply });
+    await this.runtime.replyPermission(sessionID, requestID, reply);
   }
 
   async messages(sessionID: string): Promise<unknown> {
-    return this.api("GET", `/api/session/${sessionID}/message`);
+    return this.runtime.messages(sessionID);
   }
 
   /** Answer a question request: answers = one array of selected labels per question. */
   async replyQuestion(sessionID: string, requestID: string, answers: string[][]): Promise<void> {
-    await this.api("POST", `/api/session/${sessionID}/question/${requestID}/reply`, { answers });
+    await this.runtime.replyQuestion(sessionID, requestID, answers);
   }
 
   async pendingQuestions(sessionID: string): Promise<Array<Record<string, unknown>>> {
-    const res = (await this.api("GET", `/api/session/${sessionID}/question`)) as Array<Record<string, unknown>> | null;
-    return Array.isArray(res) ? res : [];
+    return this.runtime.pendingQuestions(sessionID);
   }
 }

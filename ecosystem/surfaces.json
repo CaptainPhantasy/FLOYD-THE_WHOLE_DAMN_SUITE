@@ -1,0 +1,91 @@
+{
+  "schema_version": 1,
+  "verified_at": "2026-07-13T23:45:00-04:00",
+  "authority": {
+    "source_control": "/Volumes/Storage/FLOYD_WORKSTATION",
+    "runtime": "/Volumes/Storage/FLOYD_RUNTIME",
+    "core": "Floyd Core",
+    "coding_engine": "OpenCode 1.17.18 via @floyd/opencode-runtime",
+    "surface_contract": "@floyd/sdk",
+    "rule": "Surfaces connect to Floyd Core and never directly own OpenCode lifecycle, provider credentials, durable sessions, or policy."
+  },
+  "surfaces": [
+    {
+      "id": "desktop",
+      "role": "primary desktop container",
+      "remote": "https://github.com/CaptainPhantasy/floyd-desktop-web-v2.git",
+      "local_source": "/Volumes/Storage/FloydDesktopWeb-v2",
+      "observed_branch": "add-ons",
+      "observed_head": "68ba064",
+      "source_state": "modified donor; copy required before admission",
+      "target": "apps/desktop",
+      "direct_opencode_access": false
+    },
+    {
+      "id": "ide",
+      "role": "mobile and web IDE",
+      "remote": "https://github.com/CaptainPhantasy/mobile-web-IDE.git",
+      "local_source": "/Volumes/SanDisk1Tb/MWIDE/mobile-web-IDE",
+      "observed_branch": null,
+      "observed_head": "1bec219",
+      "source_state": "donor; copy and provenance verification required",
+      "target": "apps/ide",
+      "direct_opencode_access": false
+    },
+    {
+      "id": "tui",
+      "role": "coding TUI",
+      "remote": "https://github.com/CaptainPhantasy/OhMyFloyd.git",
+      "local_source": "/Volumes/SanDisk1Tb/OhMyFloyd",
+      "observed_branch": "omf-16",
+      "observed_head": "c5d2b2",
+      "source_state": "modified donor; copy required before admission",
+      "target": "clients/tui",
+      "direct_opencode_access": false
+    },
+    {
+      "id": "pty",
+      "role": "web terminal",
+      "remote": "https://github.com/CaptainPhantasy/TerminalOne.git",
+      "local_source": "/Volumes/SanDisk1Tb/TerminalOne",
+      "observed_branch": "ci/harden-first-run",
+      "observed_head": "b3a4d9",
+      "source_state": "modified donor; copy required before admission",
+      "target": "clients/terminal",
+      "direct_opencode_access": false
+    },
+    {
+      "id": "launcher",
+      "role": "local harness launcher",
+      "remote": null,
+      "local_source": "/Volumes/Storage/harness-launcher",
+      "observed_branch": "main",
+      "observed_head": "30d6717",
+      "source_state": "clean local donor; copy required before admission",
+      "target": "apps/launcher",
+      "direct_opencode_access": false
+    },
+    {
+      "id": "adk",
+      "role": "agent management",
+      "remote": "https://github.com/CaptainPhantasy/ADKv2Agent.git",
+      "local_source": "/Volumes/applebottom/AGENTS FRAMEWORK/ADKv2Agent",
+      "observed_branch": "main",
+      "observed_head": "c70c9b3",
+      "source_state": "clean local donor; copy required before admission",
+      "target": "apps/agent-management",
+      "direct_opencode_access": false
+    },
+    {
+      "id": "mobile",
+      "role": "mobile app connector",
+      "remote": "https://github.com/CaptainPhantasy/The_Burner.git",
+      "local_source": null,
+      "observed_branch": null,
+      "observed_head": "f1da3eb",
+      "source_state": "remote verified; no local source found",
+      "target": "apps/mobile",
+      "direct_opencode_access": false
+    }
+  ]
+}

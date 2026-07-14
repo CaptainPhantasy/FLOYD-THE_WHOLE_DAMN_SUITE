@@ -4,5 +4,8 @@
     "composite": true
   },
   "include": ["src", "test"],
-  "references": [{ "path": "../../packages/contracts" }]
+  "references": [
+    { "path": "../../packages/contracts" },
+    { "path": "../../engines/opencode" }
+  ]
 }

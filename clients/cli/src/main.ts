@@ -5,9 +5,11 @@
  * (blueprint: never silently start a second authority).
  */
 import { readFileSync } from "node:fs";
+import { FloydApiError, FloydClient } from "@floyd/sdk";
 
 const RUNTIME_ROOT = process.env.FLOYD_RUNTIME_ROOT ?? "/Volumes/Storage/FLOYD_RUNTIME";
 const CORE = `http://127.0.0.1:${process.env.FLOYD_CORE_PORT ?? 41414}`;
+const client = new FloydClient({ baseUrl: CORE, token });
 
 function token(): string {
   try {
@@ -23,21 +25,12 @@ function fail(msg: string): never {
 }
 
 async function api(method: string, path: string, body?: unknown): Promise<unknown> {
-  let r: Response;
   try {
-    r = await fetch(`${CORE}${path}`, {
-      method,
-      headers: { authorization: `Bearer ${token()}`, ...(body ? { "content-type": "application/json" } : {}) },
-      body: body ? JSON.stringify(body) : undefined,
-    });
-  } catch {
+    return await client.request(method, path, body);
+  } catch (error) {
+    if (error instanceof FloydApiError) fail(error.message);
     fail(`Floyd Core is not running — verify launchd service com.floyd.core (launchctl list | grep com.floyd.core). Surfaces never start Core themselves.`);
   }
-  const text = await r.text();
-  let data: unknown;
-  try { data = JSON.parse(text); } catch { data = text; }
-  if (!r.ok) fail(`${method} ${path} -> ${r.status}: ${typeof data === "string" ? data : JSON.stringify(data)}`);
-  return data;
 }
 
 function printJson(v: unknown): void {
@@ -113,47 +106,19 @@ switch (cmd) {
   case "attach": {
     const [sessionId, lastId] = rest;
     if (!sessionId) fail("usage: floyd attach <session_id> [last_event_id]");
-    const r = await fetch(`${CORE}/api/sessions/${sessionId}/attach`, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${token()}`,
-        "content-type": "application/json",
-        ...(lastId ? { "last-event-id": lastId } : {}),
-      },
-      body: JSON.stringify({ actor: "douglas-cli" }),
-    });
-    if (!r.ok || !r.body) fail(`attach failed: ${r.status}`);
     console.error(`[attached to ${sessionId}${lastId ? ` resuming after seq ${lastId}` : ""} — ctrl-c to stop]`);
-    const reader = r.body.getReader();
-    const dec = new TextDecoder();
-    let buf = "";
-    let curSeq = "";
-    let curType = "";
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      const lines = buf.split("\n");
-      buf = lines.pop() ?? "";
-      for (const line of lines) {
-        if (line.startsWith("id:")) curSeq = line.slice(3).trim();
-        else if (line.startsWith("event:")) curType = line.slice(6).trim();
-        else if (line.startsWith("data:")) {
-          try {
-            const e = JSON.parse(line.slice(5).trim()) as Record<string, unknown>;
-            if (curType === "token") {
-              const d = (e.data ?? {}) as Record<string, unknown>;
-              process.stdout.write(String(d.delta ?? d.text ?? ""));
-            } else if (curType === "hello") {
-              console.error(`[hello last_seq=${(e as { last_seq?: number }).last_seq}]`);
-            } else {
-              const d = JSON.stringify(e.data ?? {}).slice(0, 160);
-              console.log(`\n[seq ${curSeq}] ${String(e.kind ?? "")} ${curType} ${d}`);
-              if (curType === "question") console.log(`  -> answer with: floyd answer ${sessionId} <request_id> <label>`);
-              if (curType === "permission") console.log(`  -> decide with: floyd grant|deny ${sessionId} <request_id>`);
-            }
-          } catch { /* skip */ }
-        }
+    for await (const event of client.attachSession(sessionId, "douglas-cli", { lastEventId: lastId })) {
+      const e = event.data as Record<string, unknown>;
+      if (event.type === "token") {
+        const d = (e.data ?? {}) as Record<string, unknown>;
+        process.stdout.write(String(d.delta ?? d.text ?? ""));
+      } else if (event.type === "hello") {
+        console.error(`[hello last_seq=${String(e.last_seq ?? "")}]`);
+      } else {
+        const d = JSON.stringify(e.data ?? {}).slice(0, 160);
+        console.log(`\n[seq ${event.id ?? ""}] ${String(e.kind ?? "")} ${event.type} ${d}`);
+        if (event.type === "question") console.log(`  -> answer with: floyd answer ${sessionId} <request_id> <label>`);
+        if (event.type === "permission") console.log(`  -> decide with: floyd grant|deny ${sessionId} <request_id>`);
       }
     }
     break;
@@ -161,45 +126,30 @@ switch (cmd) {
   case "say": {
     const [sessionId, ...text] = rest;
     if (!sessionId || text.length === 0) fail("usage: floyd say <session_id> <text...>");
-    printJson(await api("POST", `/api/sessions/${sessionId}/steer`, { type: "steer", text: text.join(" "), actor: "douglas-cli" }));
+    printJson(await client.steer(sessionId, text.join(" "), "douglas-cli"));
     break;
   }
   case "answer": {
     const [sessionId, requestId, ...labels] = rest;
     if (!sessionId || !requestId || labels.length === 0) fail("usage: floyd answer <session_id> <request_id> <label...>");
-    printJson(await api("POST", `/api/sessions/${sessionId}/steer`, { type: "answer", request_id: requestId, answers: [labels], actor: "douglas-cli" }));
+    printJson(await client.answer(sessionId, requestId, [labels], "douglas-cli"));
     break;
   }
   case "grant":
   case "deny": {
     const [sessionId, requestId] = rest;
     if (!sessionId || !requestId) fail(`usage: floyd ${cmd} <session_id> <request_id>`);
-    printJson(await api("POST", `/api/sessions/${sessionId}/steer`, { type: "permission", request_id: requestId, reply: cmd === "grant" ? "once" : "reject", actor: "douglas-cli" }));
+    printJson(await client.permission(sessionId, requestId, cmd === "grant" ? "once" : "reject", "douglas-cli"));
     break;
   }
   case "watch": {
     const [runId] = rest;
     if (!runId) fail("usage: floyd watch <run_id>");
-    const r = await fetch(`${CORE}/api/runs/${runId}/stream`, { headers: { authorization: `Bearer ${token()}` } });
-    if (!r.ok || !r.body) fail(`stream unavailable: ${r.status}`);
     console.error(`[watching ${runId} — ctrl-c to stop]`);
-    const reader = r.body.getReader();
-    const dec = new TextDecoder();
-    let buf = "";
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      const lines = buf.split("\n");
-      buf = lines.pop() ?? "";
-      for (const line of lines) {
-        if (!line.startsWith("data:")) continue;
-        try {
-          const e = JSON.parse(line.slice(5).trim()) as { type?: string; kind?: string; properties?: unknown };
-          const detail = JSON.stringify(e.properties ?? {}).slice(0, 140);
-          console.log(`${new Date().toISOString().slice(11, 19)} ${e.kind ?? "-"} ${e.type ?? "hello"} ${detail}`);
-        } catch { /* skip */ }
-      }
+    for await (const event of client.watchRun(runId)) {
+      const e = event.data as { type?: string; kind?: string; properties?: unknown };
+      const detail = JSON.stringify(e.properties ?? {}).slice(0, 140);
+      console.log(`${new Date().toISOString().slice(11, 19)} ${e.kind ?? "-"} ${e.type ?? event.type} ${detail}`);
     }
     break;
   }

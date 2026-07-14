@@ -1,0 +1,27 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
+interface Surface {
+  id: string;
+  remote: string | null;
+  local_source: string | null;
+  direct_opencode_access: boolean;
+}
+
+test("ecosystem manifest names every requested surface behind Floyd Core", () => {
+  const manifest = JSON.parse(readFileSync(join(import.meta.dirname, "../../../ecosystem/surfaces.json"), "utf8")) as {
+    authority: { core: string; coding_engine: string; surface_contract: string };
+    surfaces: Surface[];
+  };
+  const expected = ["desktop", "ide", "tui", "pty", "launcher", "adk", "mobile"];
+  assert.deepEqual(manifest.surfaces.map((surface) => surface.id).sort(), expected.sort());
+  assert.equal(manifest.authority.core, "Floyd Core");
+  assert.match(manifest.authority.coding_engine, /OpenCode 1\.17\.18/);
+  assert.equal(manifest.authority.surface_contract, "@floyd/sdk");
+  for (const surface of manifest.surfaces) {
+    assert.equal(surface.direct_opencode_access, false, `${surface.id} must not bypass Core`);
+    assert.ok(surface.remote || surface.local_source, `${surface.id} needs verified provenance`);
+  }
+});
