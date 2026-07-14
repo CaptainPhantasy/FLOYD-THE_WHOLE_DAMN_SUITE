@@ -34,6 +34,7 @@ test("official SDK adapter uses pinned v2 lifecycle routes and payloads", async 
   await runtime.prompt("ses_sdk_1", "build it");
   await runtime.steer("ses_sdk_1", "avoid generated files");
   await runtime.switchModel("ses_sdk_1", "provider-2", "model-2");
+  await runtime.abortSession("ses_sdk_1");
   assert.equal((await runtime.messages("ses_sdk_1")).length, 1);
   assert.deepEqual(await runtime.pendingPermissions("ses_sdk_1"), [{ id: "per_1" }]);
   await runtime.replyPermission("ses_sdk_1", "per_1", "once");
@@ -46,6 +47,7 @@ test("official SDK adapter uses pinned v2 lifecycle routes and payloads", async 
     ["/api/session/ses_sdk_1/prompt", "POST"],
     ["/api/session/ses_sdk_1/prompt", "POST"],
     ["/api/session/ses_sdk_1/model", "POST"],
+    ["/session/ses_sdk_1/abort", "POST"],
     ["/api/session/ses_sdk_1/message", "GET"],
     ["/api/session/ses_sdk_1/permission", "GET"],
     ["/api/session/ses_sdk_1/permission/per_1/reply", "POST"],
@@ -67,6 +69,8 @@ test("official SDK adapter uses pinned v2 lifecycle routes and payloads", async 
     prompt: { text: "avoid generated files" },
     resume: true,
   });
+  const messagesRequest = requests.find((request) => new URL(request.url).pathname.endsWith("/message"));
+  assert.equal(new URL(messagesRequest?.url ?? "http://invalid").searchParams.get("limit"), "200");
 });
 
 test("event subscription aborts the SDK reader when stopped", async () => {

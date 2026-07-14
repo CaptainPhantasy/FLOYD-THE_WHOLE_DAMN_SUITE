@@ -159,6 +159,10 @@ export class OpenCodeEngine {
     await this.runtime.switchModel(sessionID, providerID, modelID);
   }
 
+  async abortSession(sessionID: string): Promise<void> {
+    await this.runtime.abortSession(sessionID);
+  }
+
   /** True when the session has at least one assistant turn (i.e. work actually ran). */
   async hasAssistantTurn(sessionID: string): Promise<boolean> {
     const msgs = (await this.messages(sessionID)) as Array<Record<string, unknown>>;
@@ -175,12 +179,23 @@ export class OpenCodeEngine {
     const deadline = Date.now() + timeoutMs;
     let stable = 0;
     let lastSig = "";
+    let messageErrors = 0;
+    let permissionErrors = 0;
     while (Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 3000));
       let msgs: Array<Record<string, unknown>>;
       try {
         msgs = await this.messages(sessionID) as Array<Record<string, unknown>>;
-      } catch {
+        messageErrors = 0;
+      } catch (error) {
+        messageErrors += 1;
+        if (messageErrors >= 3) {
+          const abortDetail = await this.abortDetail(sessionID);
+          throw new Error(
+            `session ${sessionID} message polling failed ${messageErrors} consecutive times: ${error instanceof Error ? error.message : String(error)}; ${abortDetail}`,
+            { cause: error },
+          );
+        }
         continue;
       }
       if (!Array.isArray(msgs) || msgs.length === 0) continue;
@@ -191,7 +206,19 @@ export class OpenCodeEngine {
       let pendingPerms = 0;
       try {
         pendingPerms = (await this.pendingPermissions(sessionID)).length;
-      } catch { /* treat as none */ }
+        permissionErrors = 0;
+      } catch (error) {
+        permissionErrors += 1;
+        stable = 0;
+        if (permissionErrors >= 3) {
+          const abortDetail = await this.abortDetail(sessionID);
+          throw new Error(
+            `session ${sessionID} permission polling failed ${permissionErrors} consecutive times: ${error instanceof Error ? error.message : String(error)}; ${abortDetail}`,
+            { cause: error },
+          );
+        }
+        continue;
+      }
       const sig = `${String(last.id)}:${String(time.completed ?? "")}`;
       if (isCompletedAssistant && pendingPerms === 0 && sig === lastSig) {
         stable += 1;
@@ -207,7 +234,20 @@ export class OpenCodeEngine {
         lastSig = sig;
       }
     }
-    throw new Error(`session ${sessionID} did not go idle within ${timeoutMs}ms`);
+    // A deadline is a circuit-break event, not just a bookkeeping failure.
+    // Stop upstream model/tool work before releasing the worktree lease so a
+    // failed run cannot continue consuming tokens or mutating abandoned state.
+    const abortDetail = await this.abortDetail(sessionID);
+    throw new Error(`session ${sessionID} did not go idle within ${timeoutMs}ms; ${abortDetail}`);
+  }
+
+  private async abortDetail(sessionID: string): Promise<string> {
+    try {
+      await this.abortSession(sessionID);
+      return "upstream session aborted";
+    } catch (error) {
+      return `upstream abort failed: ${error instanceof Error ? error.message : String(error)}`;
+    }
   }
 
   async pendingPermissions(sessionID: string): Promise<Array<Record<string, unknown>>> {

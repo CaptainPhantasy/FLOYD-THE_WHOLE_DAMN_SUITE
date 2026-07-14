@@ -85,9 +85,19 @@ export class OpenCodeSdkRuntime {
     );
   }
 
+  /** Stop active model/tool work for a session through the official SDK. */
+  async abortSession(sessionID: string): Promise<void> {
+    // The 1.17.18 SDK's v2 Session3 surface omits abort even though session
+    // creation/prompt live there. The official stable session surface exposes
+    // the required abort endpoint and accepts the same session IDs.
+    await this.client.session.abort({ sessionID }, this.callOptions());
+  }
+
   async messages(sessionID: string): Promise<SessionMessage[]> {
     const result = await this.client.v2.session.messages(
-      { sessionID, order: "desc", limit: 250 },
+      // OpenCode 1.17.18 rejects values above 200 with HTTP 400. A larger
+      // value made Core's idle poll fail forever while the model kept running.
+      { sessionID, order: "desc", limit: 200 },
       this.callOptions(),
     );
     return result.data?.data ?? [];

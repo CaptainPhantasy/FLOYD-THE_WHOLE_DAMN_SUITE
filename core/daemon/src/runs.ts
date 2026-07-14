@@ -13,6 +13,17 @@ import { loadSkill } from "./skills.ts";
 import type { PermissionPolicy } from "@floyd/contracts";
 
 const PROVIDER_ID = "zai-coding-plan";
+const DEFAULT_BUILDER_IDLE_TIMEOUT_MS = 300000;
+
+function builderIdleTimeoutMs(): number {
+  const raw = process.env.FLOYD_BUILDER_IDLE_TIMEOUT_MS;
+  if (!raw) return DEFAULT_BUILDER_IDLE_TIMEOUT_MS;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 30000 || value > 900000) {
+    throw new Error("FLOYD_BUILDER_IDLE_TIMEOUT_MS must be an integer from 30000 through 900000");
+  }
+  return value;
+}
 
 interface JobRow {
   id: string;
@@ -316,9 +327,9 @@ export async function executeRun(db: Db, engine: OpenCodeEngine, runId: string):
       promptText: builderPrompt,
       policy: spec.policy,
       existingSessionId: builder.engine_session_id,
-      // Fail fast when a permission is rejected or the engine stalls; do not
-      // hold the worktree lease for the full 600s default.
-      idleTimeoutMs: 120000,
+      // Interactive questions consume part of this wall-clock window. Keep it
+      // bounded and operator-configurable, then abort upstream on expiration.
+      idleTimeoutMs: builderIdleTimeoutMs(),
     });
     sessionID = res.sessionID;
     transcript = res.transcript;
