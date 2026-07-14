@@ -300,3 +300,15 @@ A 2026-07-12 audit found a self-resurrecting `com.floyd.core` launchd daemon, a 
 - Upgraded Express to 4.22.2 and WebSocket to 8.21.0. Production audit moved from four advisories to zero; full-install dev advisories remain.
 - Verification passed: `npm run lint`, `npm run build`, production audit zero, live Core health HTTP 200 with OpenCode healthy, live folder workspace HTTP 200 for `/Volumes/Storage/FLOYD_WORKSTATION`, and installed-Chrome rendered proof with enabled Core input, no provider-key UI, no emoji, and no page errors.
 - Component commit `e094896512d97bfd65935cd25da5c30a55848dae` pushed to `CaptainPhantasy/mobile-web-IDE` branch `feat/floyd-core-runtime`.
+
+## TerminalOne and harness-launcher Core integration — 2026-07-14
+
+- Edited only the independent intake copies. `/Volumes/SanDisk1Tb/TerminalOne` retained its pre-existing documentation changes, and `/Volumes/Storage/harness-launcher` remained clean; neither donor was modified.
+- Added CommonJS-compatible, zero-dependency `@floyd/sdk` snapshots and server-side `/api/floyd/health` bridges. The gateway token is read under `FLOYD_RUNTIME_ROOT` inside Node and is never returned to the browser or placed in a process argument.
+- Both bridges preserve upstream HTTP status and JSON error payloads. The launcher regression test proved exact 429 preservation and that abandoning the browser request closes the outbound Core request; TerminalOne proved exact 401 preservation.
+- Added a trusted PTY-local Core CLI command. It defines collision-free `floyd_core`, removes a pre-existing legacy `floyd` alias, then installs a session-local `floyd` alias; no global shell files change and the CLI still talks only to Floyd Core through `@floyd/sdk`.
+- The launcher now lists `floyd-core` from its single-source registry. Its full suite exercised all 16 registered harnesses plus error recovery, argument injection resistance, respawn-race prevention, and concurrent isolation.
+- TerminalOne gained a Floyd action, Core/OpenCode status, loopback binding by default, `node:crypto.randomUUID()` in place of `uuid`, structured occupied-port failure, and removal of rendered gear/star/close glyphs. Its full input, Core, browser, resume, feature, behavior, and responsive suites passed.
+- Both production and complete dependency audits report zero vulnerabilities. Express is 4.22.2 and WebSocket is 8.21.0.
+- Live proof used Floyd Core PID 55182 and managed OpenCode PID 55188. Rendered browser checks on isolated ports showed `Core/OpenCode online`, real `floyd-core` health JSON in each PTY, no provider/API-key text, no rendered emoji, and no page errors. The first launcher render exposed a missing favicon 404; a data favicon removed it before the final proof.
+- TerminalOne commit `b657853ce0f373637261145ecf4666b920bcdc8e` pushed to `CaptainPhantasy/TerminalOne` branch `feat/floyd-core-runtime`. Launcher commit `55d81f95f2b4bcaa28272678b4b6ee8659578d3e` remains only in the independent copy because its `origin` is the protected local donor.

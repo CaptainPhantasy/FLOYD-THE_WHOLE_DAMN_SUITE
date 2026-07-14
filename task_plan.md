@@ -331,9 +331,11 @@ every item there is checked with evidence and blueprint gates A–H pass.
 - [ ] Replace each admitted surface's direct backend/model ownership with `@floyd/sdk`.
 - [x] Route the Desktop coding pane through a server-side `@floyd/sdk` bridge, preserve Core errors, propagate aborts, remove provider-key UI and emoji, bind the bridge to loopback, and record verified component head `3eba9b3`.
 - [x] Route the IDE coding pane through a server-side `@floyd/sdk` bridge and prove folder-as-workspace behavior, Core health, rendered pane state, and component commit `e094896`.
+- [x] Route TerminalOne through a server-side `@floyd/sdk` health bridge and a trusted PTY action that prepares the canonical Core CLI; prove exact error forwarding, loopback binding, live Core/OpenCode output, rendered state, and pushed component commit `b657853`.
+- [x] Add Floyd Core to the launcher's single-source harness registry, route health through the server-side SDK, prove upstream abort propagation and all 16 harnesses, and record independent-copy commit `55d81f9` without pushing into its protected local donor.
 - [ ] Add launch, health, recovery, and cross-surface runtime acceptance receipts.
 - [ ] Publish verified logical commits to the whole-suite remote.
-- **Status:** in progress; foundational runtime/client boundary plus Desktop and IDE component integrations verified. TUI, PTY, launcher, ADK, and mobile remain pending.
+- **Status:** in progress; foundational runtime/client boundary plus Desktop, IDE, PTY, and launcher component integrations verified. TUI, ADK, and mobile remain pending.
 
 ## Plan Maintenance
 

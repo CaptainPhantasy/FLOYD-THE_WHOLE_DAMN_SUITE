@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "verified_at": "2026-07-14T00:22:00-04:00",
+  "verified_at": "2026-07-14T00:38:13-04:00",
   "authority": {
     "source_control": "/Volumes/Storage/FLOYD_WORKSTATION",
     "runtime": "/Volumes/Storage/FLOYD_RUNTIME",
@@ -78,6 +78,16 @@
       "source_state": "modified donor; copy required before admission",
       "intake_copy": "/Volumes/Storage/FLOYD_WORKSTATION/intake/surfaces/pty",
       "copy_verified": true,
+      "integration": {
+        "status": "verified_component_branch",
+        "branch": "feat/floyd-core-runtime",
+        "commit": "b657853ce0f373637261145ecf4666b920bcdc8e",
+        "remote_ref": "origin/feat/floyd-core-runtime",
+        "contract": "vendored @floyd/sdk -> loopback Floyd Core health bridge + canonical CLI PTY -> managed OpenCode SDK",
+        "production_audit_vulnerabilities": 0,
+        "rendered_proof": true,
+        "pty_round_trip": true
+      },
       "target": "clients/terminal",
       "direct_opencode_access": false
     },
@@ -91,6 +101,17 @@
       "source_state": "clean local donor; copy required before admission",
       "intake_copy": "/Volumes/Storage/FLOYD_WORKSTATION/intake/surfaces/launcher",
       "copy_verified": true,
+      "integration": {
+        "status": "verified_local_copy_commit",
+        "branch": "feat/floyd-core-runtime",
+        "commit": "55d81f95f2b4bcaa28272678b4b6ee8659578d3e",
+        "remote_ref": null,
+        "remote_note": "origin is the protected local donor; intentionally not pushed",
+        "contract": "vendored @floyd/sdk -> loopback Floyd Core health bridge + canonical CLI harness -> managed OpenCode SDK",
+        "production_audit_vulnerabilities": 0,
+        "rendered_proof": true,
+        "pty_round_trip": true
+      },
       "target": "apps/launcher",
       "direct_opencode_access": false
     },
