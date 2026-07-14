@@ -62,8 +62,9 @@ for target in "$DEST"/*; do
   ' sh {} +; then :; else exit 1; fi
 done
 
-source_probe=$(find "$LAUNCHER_SOURCE" -type f ! -path '*/.git/*' | head -1)
-relative_probe=${source_probe#"$LAUNCHER_SOURCE"/}
+relative_probe=$(git -C "$LAUNCHER_SOURCE" ls-files | sed -n '1p')
+test -n "$relative_probe"
+source_probe="$LAUNCHER_SOURCE/$relative_probe"
 target_probe="$LAUNCHER_TARGET/$relative_probe"
 test -f "$target_probe"
 source_inode=$(stat -f '%d:%i' "$source_probe")

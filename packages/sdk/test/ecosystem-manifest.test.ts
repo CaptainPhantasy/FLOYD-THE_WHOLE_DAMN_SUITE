@@ -8,6 +8,8 @@ interface Surface {
   remote: string | null;
   local_source: string | null;
   direct_opencode_access: boolean;
+  intake_copy: string;
+  copy_verified: boolean;
 }
 
 test("ecosystem manifest names every requested surface behind Floyd Core", () => {
@@ -23,5 +25,7 @@ test("ecosystem manifest names every requested surface behind Floyd Core", () =>
   for (const surface of manifest.surfaces) {
     assert.equal(surface.direct_opencode_access, false, `${surface.id} must not bypass Core`);
     assert.ok(surface.remote || surface.local_source, `${surface.id} needs verified provenance`);
+    assert.equal(surface.copy_verified, true, `${surface.id} needs an independently verified copy`);
+    assert.match(surface.intake_copy, new RegExp(`/intake/surfaces/${surface.id}$`));
   }
 });
