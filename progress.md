@@ -404,3 +404,36 @@ scope reduction or a deferral of the connected-application experience.
   prior page. Core now sends `Cache-Control: no-store` for Cockpit HTML and the
   browser SDK, and the repeated load-event-gated render showed current PTY
   `210c7337`, Launcher `93f26dfd`, exact semantic TUI handoff, and no emoji.
+- The requirement audit found that the Hub still opened separate windows. It
+  now hosts verified Desktop, IDE, TerminalOne, Launcher, and exact TUI
+  continuation as tabs inside one Cockpit workspace. TerminalOne commit
+  `538cc47dfd1fa327029c2745235e079e95055dfc` recognizes only the non-secret
+  `floyd=continue` marker, scrubs it before network activity, and resolves all
+  context from Core. TerminalOne and Launcher commit
+  `855fb0a2fac2bf2fd26d0e3188cdcf2512663270` also acknowledge a bounded
+  Core-parent close request only after issuing their explicit PTY teardown;
+  Cockpit serializes tab navigation and waits for that matching acknowledgement
+  before it removes the child frame.
+- Live switching then exposed TerminalOne's legacy cache-first service worker:
+  it served the pre-acknowledgement app shell and cloned infinite experience SSE
+  bodies into Cache Storage, exhausting the browser's six per-origin connection
+  slots. Commit `538cc47dfd1fa327029c2745235e079e95055dfc` makes app-shell navigation
+  network-first with offline fallback, keeps API/admin/health and SSE responses
+  network-only, and uses the non-launching `floyd=integrated` marker to bypass a
+  legacy cached root on the first integrated open.
+- Final live acceptance used Chrome 150 against the launchd-owned admitted
+  copies. TerminalOne went from `active=0` to one attached session and back to
+  `active=0,resumableCount=0` after an in-shell switch; Launcher did the same
+  after a real `floyd-core` harness launch. Desktop, IDE, Launcher, TerminalOne,
+  and the TUI continuation each rendered `readyState=complete` as the sole child
+  frame with matching active tabs and no Cockpit error toast.
+- The TUI acceptance temporarily selected existing accepted run
+  `run_mrh89sxa0aa9e039a433`. The Hub showed the exact Core project/session/run,
+  TerminalOne scrubbed `floyd=continue`, and the terminal launched the admitted
+  TUI from `/Volumes/Storage/FLOYD_RUNTIME/projects/scratch-calc` with that exact
+  tuple. Switching away returned PTY counts to zero, and the original idle
+  envelope plus `model-settings` view was restored at revision 633.
+- That proof also caught a startup timing edge: the Hub could render before the
+  initial envelope restore completed. It now waits for `experienceReady` and
+  refreshes the Core envelope before showing cards, preventing a valid run from
+  appearing as a stale project-only continuation.

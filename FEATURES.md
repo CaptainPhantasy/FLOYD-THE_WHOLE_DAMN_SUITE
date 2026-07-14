@@ -13,6 +13,7 @@
 | Private remote attach | In progress | Separate 41416 allowlisted listener and Tailscale HTTPS 8443 are live; scoped attach, out-of-bound denial, logout, and stream revocation pass, but a second physical tailnet-device proof remains |
 | Connector/OAuth authority | In progress | AES-GCM API-key/OAuth storage, PKCE, refresh/revoke, endpoint-bound relay references, SDK parity, and mock lifecycle tests pass; real-provider OAuth proof remains |
 | Five-surface local continuity | Preview baseline | Desktop, IDE, TUI, TerminalOne, and launcher commits are pinned for local developer testing; exact TUI project/session/run/event handoff and semantic/transport ownership are explicit |
+| Unified application workspace | Verified local preview | Cockpit renders Desktop, IDE, TerminalOne, Launcher, and exact TUI continuation in one Core-connected tabbed shell; live PTY/Launcher close tests return active and resumable session counts to zero, while remote embedding remains an open gate |
 | Unified private remote experience | In progress | Cockpit QR/private attach is implemented; physical second-device proof and native secure storage remain |
 
 “Shipped” means direct implementation and named verification exist. “In

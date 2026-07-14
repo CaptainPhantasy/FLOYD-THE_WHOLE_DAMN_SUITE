@@ -111,6 +111,20 @@
 - Cockpit HTML and the browser SDK are served with `Cache-Control: no-store`,
   preventing an existing developer browser from resurrecting a stale surface
   contract after Core restarts on a newer checkout.
+- Cockpit's Surface Hub is now a unified in-place application workspace rather
+  than a list of external links. Verified Desktop, IDE, TerminalOne, Launcher,
+  and exact TUI continuation share one tabbed shell, while separate-window
+  launch remains an explicit secondary action.
+- The integrated TUI tab loads the admitted TerminalOne copy with a one-shot,
+  non-secret continuation marker. TerminalOne removes it from browser history,
+  asks Core for the authoritative project/session/run/event tuple, and launches
+  the admitted TUI only for a fresh terminal session.
+- TerminalOne's offline worker now treats app-shell navigations as network-first
+  and API/admin/health plus SSE as network-only. It no longer caches an infinite
+  experience stream or lets an old cache-first shell bypass integrated teardown.
+- Opening the unified workspace now waits for Cockpit's initial Core envelope
+  restore and refreshes that envelope before rendering, so an immediate open
+  cannot show project-only fallback over a valid session/run continuation.
 
 ### Security
 

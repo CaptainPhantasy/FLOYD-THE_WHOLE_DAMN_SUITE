@@ -341,6 +341,50 @@ every item there is checked with evidence and blueprint gates A–H pass.
 - [x] Prove exact vendor error passthrough, dialect translation, normalized SSE, loopback CORS, client-abort socket destruction, and live authenticated Core relay behavior.
 - **Status:** complete; all five active component copies are verified, pinned in the manifest, and published where a remote exists.
 
+## Portable Experience Completion Audit — 2026-07-14
+
+This is the active completion gate for the Core-owned experience objective. It
+supersedes any older wording that called the five-surface baseline complete.
+Source implementation, automated proof, live runtime proof, rendered proof,
+and physical/external proof remain separate truth states.
+
+- [x] Core envelope represents active project, session, run, and model route.
+- [x] Core envelope represents transcript epoch/cursor and last observed event.
+- [x] Core envelope represents pending questions and permissions.
+- [x] Core envelope represents the unsent composer draft.
+- [x] Core envelope represents the selected artifact and view.
+- [x] Negotiated surface registrations record SDK version and capabilities.
+- [x] Device authority encrypts private metadata, stores only a verifier for the
+  device secret, and treats the public device ID as an identifier rather than a
+  credential.
+- [x] One-time revision-bound deep-link and local QR handoff are implemented.
+- [x] The separate allowlisted remote listener, scoped attach session, stream
+  revocation, and logout paths are implemented and covered by black-box tests.
+- [x] Connector/API-key and OAuth PKCE authority are implemented with encrypted
+  token storage, endpoint binding, refresh coalescing, and revocation.
+- [x] Typed and browser SDKs negotiate the protocol/envelope range and preserve
+  exact 409/426 failures.
+- [x] Cockpit contains one tabbed application shell for every locally admitted
+  browser surface, including one-shot semantic TUI continuation through the
+  TerminalOne copy.
+- [x] Pin the final PTY and Launcher teardown-acknowledgement commits, restart
+  admitted copies, and prove live active-session counts return to zero after an
+  in-shell switch or close.
+- [x] Re-run visible integrated-shell acceptance against every admitted browser
+  copy after the final pinned restart; structural or blank-frame proof does not
+  satisfy this item.
+- [ ] Prove the QR/deep-link flow from a second physical tailnet device and
+  revoke the resulting device session.
+- [ ] Exercise one real provider OAuth callback/refresh/revoke lifecycle; mock
+  provider coverage remains implementation proof, not external-provider proof.
+- [ ] Resolve the current remote boundary: a remote Cockpit restores the Core
+  envelope but cannot yet embed workstation-loopback application copies. Do not
+  claim all platforms are accessible from one another until this is implemented
+  or the product scope is explicitly narrowed by the user.
+
+**Status:** in progress. The goal remains open until every unchecked item has a
+receipt or the user explicitly changes the acceptance boundary.
+
 ## Plan Maintenance
 
 - Re-read this file before implementation and cutover decisions.

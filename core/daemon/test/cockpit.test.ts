@@ -75,6 +75,9 @@ test("Surface Hub launch targets are credential-free and TUI continuation is she
 });
 
 test("Surface Hub reports Core-restored continuity and the honest remote loopback boundary", () => {
+  assert.match(html, /Floyd unified workspace/);
+  assert.match(html, /id="surfaceFrame"/);
+  assert.match(html, /id="surfaceTabs"/);
   assert.match(html, /Core continuation envelope/);
   assert.match(html, /app\.envelope\?\.active/);
   assert.match(html, /app\.envelope\?\.last_event_id/);
@@ -84,8 +87,22 @@ test("Surface Hub reports Core-restored continuity and the honest remote loopbac
   assert.match(html, /client\.request\("GET", "\/api\/surfaces", undefined, controller\.signal\)/);
   assert.match(html, /entry\?\.id === surface\.id && entry\?\.target === surface\.target/);
   assert.match(html, /data-surface-open=/);
-  assert.match(html, /\$\{verified \? "" : "disabled"\}/);
-  assert.match(html, /surfaceAvailability\.get\(surface\.id\)\?\.verified !== true/);
+  assert.match(html, /function openIntegratedSurface/);
+  assert.match(html, /app\.surfaceAvailability\.get\(surface\.id\)\?\.verified !== true/);
+  assert.match(html, /target\.searchParams\.set\("floyd", "continue"\)/);
+  assert.match(html, /target\.searchParams\.set\("floyd", "integrated"\)/);
+  assert.match(html, /el\("surfaceFrame"\)\.src = target/);
+  assert.match(html, /surfaceNavigation: Promise\.resolve\(\)/);
+  assert.match(html, /function enqueueSurfaceNavigation/);
+  assert.match(html, /experienceReady: null/);
+  assert.match(html, /if \(app\.experienceReady\) await app\.experienceReady/);
+  assert.match(html, /await restoreEnvelope\(await client\.experience\(envelopeId\)\)/);
+  assert.match(html, /const requestId = crypto\.randomUUID\(\)/);
+  assert.match(html, /postMessage\(\{ type: "floyd:surface-close", requestId \}, childOrigin\)/);
+  assert.match(html, /event\.data\?\.type !== "floyd:surface-closed"/);
+  assert.match(html, /\["pty", "launcher", "tui"\]\.includes\(app\.integratedSurfaceId\)/);
+  assert.match(html, /if \(!acknowledged\)[\s\S]*kept it visible instead of detaching a hidden session/);
+  assert.match(html, /frame\.src = "about:blank"/);
   assert.match(html, /window\.open\(target, "_blank", "noopener,noreferrer"\)/);
   assert.doesNotMatch(html, /[?&#](token|secret|api_key|session_id|run_id|last_event_id)=/i);
 });

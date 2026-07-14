@@ -40,6 +40,18 @@ architecture; it is not being used as an excuse to weaken Floyd-to-Floyd
 handoff. A PTY byte stream still remains transport rather than a semantic
 conversation.
 
+The local Cockpit now supplies the single integrated application shell. Its
+workspace embeds only Core-verified admitted browser copies and exposes them as
+in-place tabs. Choosing the TUI tab loads TerminalOne with a one-shot
+`floyd=continue` marker; no project, session, run, event, token, or credential
+enters that URL. TerminalOne removes the marker before its WebSocket opens and
+asks Core for the exact semantic tuple. Closing or switching the workspace
+requires a request-ID-matched teardown acknowledgement before unloading the
+prior frame instead of leaving a hidden application running. TerminalOne uses
+network-first app-shell navigation with offline fallback; API and SSE responses
+are never cached, and a non-launching integrated marker bypasses an older cached
+root during the first upgraded open.
+
 ## Sharp edges
 
 This is a local-developer preview baseline on the path to the full connected-

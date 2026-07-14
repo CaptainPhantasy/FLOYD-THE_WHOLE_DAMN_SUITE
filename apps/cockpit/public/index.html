@@ -133,9 +133,10 @@
   .handoff-qr { width: min(320px, 100%); aspect-ratio: 1; margin: 0 auto 14px; padding: 10px; background: #fff; border-radius: 6px; }
   .handoff-qr img { width: 100%; height: 100%; display: block; }
   .handoff-note { margin: 10px 0 0; color: var(--faint); font-size: 11px; }
-  .surface-dialog { width: min(760px, calc(100vw - 32px)); max-height: min(760px, calc(100vh - 32px)); border: 1px solid var(--line-strong); border-radius: 10px; padding: 0; background: var(--surface); color: var(--text); box-shadow: 0 24px 80px rgba(0,0,0,.6); }
+  .surface-dialog { width: min(1320px, calc(100vw - 24px)); height: min(900px, calc(100vh - 24px)); max-width: none; max-height: none; border: 1px solid var(--line-strong); border-radius: 10px; padding: 0; background: var(--surface); color: var(--text); box-shadow: 0 24px 80px rgba(0,0,0,.6); }
   .surface-dialog::backdrop { background: rgba(0,0,0,.72); }
-  .surface-body { padding: 15px; overflow: auto; }
+  .surface-body { height: calc(100% - 48px); padding: 15px; overflow: auto; }
+  .surface-home { min-height: 100%; }
   .surface-context { border: 1px solid var(--line); border-radius: 7px; background: var(--surface-2); padding: 10px 12px; margin-bottom: 12px; }
   .surface-context strong { display: block; margin-bottom: 5px; font: 600 10px var(--mono); letter-spacing: .08em; text-transform: uppercase; }
   .surface-context code { color: var(--muted); font: 10px/1.6 var(--mono); overflow-wrap: anywhere; }
@@ -146,6 +147,18 @@
   .surface-target { display: block; min-height: 31px; margin-bottom: 9px; padding: 6px 7px; border: 1px solid var(--line); border-radius: 5px; background: var(--bg); color: var(--faint); font: 9px/1.45 var(--mono); overflow-wrap: anywhere; }
   .surface-actions { display: flex; gap: 7px; }
   .surface-boundary { margin: 12px 0 0; color: var(--faint); font-size: 10px; }
+  .surface-stage { height: 100%; min-height: 0; display: grid; grid-template-rows: auto auto minmax(0,1fr); gap: 9px; }
+  .surface-stage[hidden], .surface-home[hidden] { display: none; }
+  .surface-stage-head { display: flex; align-items: center; gap: 9px; }
+  .surface-stage-title { min-width: 0; margin-right: auto; }
+  .surface-stage-title span { display: block; color: var(--faint); font: 9px var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+  .surface-stage-title strong { display: block; margin-top: 3px; font-size: 13px; }
+  .surface-tabs { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 1px; }
+  .surface-tab { flex: 0 0 auto; border: 1px solid var(--line); border-radius: 5px; padding: 6px 9px; background: var(--surface-2); color: var(--muted); font: 10px var(--mono); cursor: pointer; }
+  .surface-tab:hover:not(:disabled), .surface-tab.active { border-color: var(--accent); color: var(--accent); }
+  .surface-tab:disabled { opacity: .38; cursor: not-allowed; }
+  .surface-frame-wrap { min-height: 0; border: 1px solid var(--line-strong); border-radius: 7px; overflow: hidden; background: #050607; }
+  .surface-frame { display: block; width: 100%; height: 100%; border: 0; background: #050607; }
   @media (max-width: 1080px) { .workspace { grid-template-columns: 46px 240px minmax(400px,1fr); } .inspector { display: none; } }
   @media (max-width: 760px) { .topbar { grid-template-columns: 1fr auto; } .command-title { display: none; } .workspace { grid-template-columns: 42px minmax(0,1fr); } .sidebar { display: none; } .messages { padding: 16px; } .composer { margin: 0 10px 10px; } .surface-grid { grid-template-columns: 1fr; } }
 </style>
@@ -207,11 +220,22 @@
   </div>
 </dialog>
 <dialog class="surface-dialog" id="surfaceDialog">
-  <div class="handoff-head"><strong>Floyd surfaces</strong><button class="quiet-button" id="closeSurfaceHub" type="button">Close</button></div>
+  <div class="handoff-head"><strong>Floyd unified workspace</strong><button class="quiet-button" id="closeSurfaceHub" type="button">Close</button></div>
   <div class="surface-body">
-    <div class="surface-context" id="surfaceContext"></div>
-    <div class="surface-grid" id="surfaceGrid"></div>
-    <p class="surface-boundary" id="surfaceBoundary"></p>
+    <div class="surface-home" id="surfaceHome">
+      <div class="surface-context" id="surfaceContext"></div>
+      <div class="surface-grid" id="surfaceGrid"></div>
+      <p class="surface-boundary" id="surfaceBoundary"></p>
+    </div>
+    <section class="surface-stage" id="surfaceStage" hidden>
+      <div class="surface-stage-head">
+        <button class="quiet-button" id="surfaceStageBack" type="button">All surfaces</button>
+        <div class="surface-stage-title"><span>Core-connected application</span><strong id="surfaceStageTitle">Floyd surface</strong></div>
+        <button class="quiet-button" id="surfaceStageExternal" type="button">Open separate</button>
+      </div>
+      <nav class="surface-tabs" id="surfaceTabs" aria-label="Integrated Floyd applications"></nav>
+      <div class="surface-frame-wrap"><iframe class="surface-frame" id="surfaceFrame" title="Integrated Floyd application" referrerpolicy="no-referrer"></iframe></div>
+    </section>
   </div>
 </dialog>
 
@@ -266,6 +290,9 @@ const app = {
   connectors: [],
   surfaceAvailability: new Map(),
   surfaceAbort: null,
+  surfaceNavigation: Promise.resolve(),
+  integratedSurfaceId: null,
+  experienceReady: null,
   envelope: null,
   envelopeAbort: null,
   draftTimer: null,
@@ -885,6 +912,113 @@ function surfaceLaunchTarget(surface, project, active = app.envelope?.active) {
   return surface.kind === "command" ? continuationCommand(project, { ...active, last_event_id: app.envelope?.last_event_id }) : safeSurfaceUrl(surface);
 }
 
+function integratedSurfaceTarget(surface) {
+  if (surface.id === "tui") {
+    const terminal = FLOYD_SURFACES.find((candidate) => candidate.id === "pty");
+    if (!terminal || app.surfaceAvailability.get("pty")?.verified !== true
+      || !surfaceLaunchTarget(surface, activeSurfaceProject())) return null;
+    const target = new URL(safeSurfaceUrl(terminal));
+    target.searchParams.set("floyd", "continue");
+    return target.href;
+  }
+  if (surface.id === "pty" && app.surfaceAvailability.get(surface.id)?.verified === true) {
+    const target = new URL(safeSurfaceUrl(surface));
+    // This non-secret marker misses any legacy cache-first '/' app shell. The
+    // current TerminalOne removes it before opening its WebSocket and does not
+    // trigger semantic TUI continuation.
+    target.searchParams.set("floyd", "integrated");
+    return target.href;
+  }
+  if (surface.kind !== "url" || app.surfaceAvailability.get(surface.id)?.verified !== true) return null;
+  return safeSurfaceUrl(surface);
+}
+
+function renderSurfaceTabs(activeId) {
+  el("surfaceTabs").innerHTML = FLOYD_SURFACES.map((surface) => {
+    const target = integratedSurfaceTarget(surface);
+    return `<button class="surface-tab ${surface.id === activeId ? "active" : ""}" type="button" data-surface-tab="${escapeHtml(surface.id)}" ${target ? "" : "disabled"}>${escapeHtml(surface.name)}</button>`;
+  }).join("");
+}
+
+function enqueueSurfaceNavigation(operation) {
+  const pending = app.surfaceNavigation.catch(() => {}).then(operation);
+  app.surfaceNavigation = pending.catch(() => {});
+  return pending;
+}
+
+function requestIntegratedSurfaceClose(frame, childOrigin) {
+  const requestId = crypto.randomUUID();
+  return new Promise((resolve) => {
+    let timer;
+    const finish = (acknowledged) => {
+      clearTimeout(timer);
+      window.removeEventListener("message", receiveAck);
+      resolve(acknowledged);
+    };
+    const receiveAck = (event) => {
+      if (event.source !== frame.contentWindow || event.origin !== childOrigin
+        || event.data?.type !== "floyd:surface-closed" || event.data?.requestId !== requestId) return;
+      finish(true);
+    };
+    window.addEventListener("message", receiveAck);
+    timer = setTimeout(() => finish(false), 1_000);
+    try {
+      frame.contentWindow?.postMessage({ type: "floyd:surface-close", requestId }, childOrigin);
+    } catch {
+      finish(false);
+    }
+  });
+}
+
+async function unloadIntegratedSurfaceFrame() {
+  const frame = el("surfaceFrame");
+  if (!frame.src || frame.src === "about:blank") return;
+  if (["pty", "launcher", "tui"].includes(app.integratedSurfaceId)) {
+    try {
+      const childOrigin = new URL(frame.src).origin;
+      // Terminal surfaces acknowledge that they issued their explicit PTY
+      // teardown before Floyd removes the browsing context. A timeout remains
+      // bounded for a frame that never finished loading; live verification
+      // separately proves that server-side session cleanup reached zero.
+      const acknowledged = await requestIntegratedSurfaceClose(frame, childOrigin);
+      if (!acknowledged) {
+        throw new Error("The terminal did not acknowledge PTY teardown; Floyd kept it visible instead of detaching a hidden session.");
+      }
+    } catch { /* a malformed or already-reset frame is simply unloaded */ }
+  }
+  frame.src = "about:blank";
+  app.integratedSurfaceId = null;
+}
+
+async function openIntegratedSurface(surface) {
+  const target = integratedSurfaceTarget(surface);
+  if (!target) throw new Error(surface.id === "tui"
+    ? "Select an active run and verify TerminalOne before continuing in the integrated TUI."
+    : "This admitted surface is not currently verified for integrated launch.");
+  await unloadIntegratedSurfaceFrame();
+  el("surfaceHome").hidden = true;
+  el("surfaceStage").hidden = false;
+  el("surfaceStageTitle").textContent = surface.name;
+  el("surfaceStageExternal").dataset.target = target;
+  el("surfaceFrame").title = `${surface.name} inside Floyd`;
+  el("surfaceFrame").src = target;
+  app.integratedSurfaceId = surface.id;
+  renderSurfaceTabs(surface.id);
+}
+
+async function closeIntegratedSurface() {
+  await unloadIntegratedSurfaceFrame();
+  el("surfaceStageExternal").removeAttribute("data-target");
+  el("surfaceStage").hidden = true;
+  el("surfaceHome").hidden = false;
+}
+
+async function closeSurfaceWorkspace() {
+  app.surfaceAbort?.abort();
+  await closeIntegratedSurface();
+  el("surfaceDialog").close();
+}
+
 async function verifySurfaceTargets() {
   app.surfaceAbort?.abort();
   const controller = new AbortController();
@@ -926,12 +1060,15 @@ function renderSurfaceHub() {
     const unavailable = !target;
     const availability = app.surfaceAvailability.get(surface.id);
     const verified = surface.kind === "url" && availability?.verified === true;
+    const integrated = surface.id === "tui"
+      ? Boolean(target && app.surfaceAvailability.get("pty")?.verified === true)
+      : verified;
     return `<article class="surface-card" data-surface-id="${escapeHtml(surface.id)}">
       <h3>${escapeHtml(surface.name)}</h3><p>${escapeHtml(surface.detail)}</p>
       <code class="surface-target">${escapeHtml(target || "Select an active run before generating the exact CLI attach command.")}</code>
       <div class="settings-note">${escapeHtml(surface.kind === "url" ? availability?.reason || "Checking admitted source identity." : "Exact semantic TUI handoff; Core validates project, session, run, and event scope before attach.")}</div>
       <div class="surface-actions">
-        ${surface.kind === "url" ? `<button class="action-button primary" type="button" data-surface-open="${escapeHtml(surface.id)}" ${verified ? "" : "disabled"}>Open verified copy</button>` : ""}
+        <button class="action-button primary" type="button" data-surface-open="${escapeHtml(surface.id)}" ${integrated ? "" : "disabled"}>${surface.id === "tui" ? "Continue in Floyd" : "Open in Floyd"}</button>
         <button class="action-button" type="button" data-surface-copy="${escapeHtml(surface.id)}" ${unavailable ? "disabled" : ""}>Copy ${surface.kind === "url" ? "address" : "command"}</button>
       </div>
     </article>`;
@@ -1394,9 +1531,32 @@ async function closeHandoff() {
 }
 el("closeHandoff").addEventListener("click", closeHandoff);
 el("handoffDialog").addEventListener("cancel", (event) => { event.preventDefault(); void closeHandoff(); });
-el("surfaceHub").addEventListener("click", () => { renderSurfaceHub(); el("surfaceDialog").showModal(); void verifySurfaceTargets(); });
-el("closeSurfaceHub").addEventListener("click", () => el("surfaceDialog").close());
-el("surfaceDialog").addEventListener("cancel", (event) => { event.preventDefault(); el("surfaceDialog").close(); });
+el("surfaceHub").addEventListener("click", () => {
+  void enqueueSurfaceNavigation(closeIntegratedSurface).then(async () => {
+    // The module installs this handler before its initial top-level await has
+    // necessarily restored Core. Never render project-only fallback state over
+    // a valid session/run handoff when the workspace is opened immediately.
+    if (app.experienceReady) await app.experienceReady;
+    await restoreEnvelope(await client.experience(envelopeId));
+    renderSurfaceHub();
+    el("surfaceDialog").showModal();
+    await verifySurfaceTargets();
+  }).catch(notify);
+});
+el("closeSurfaceHub").addEventListener("click", () => void enqueueSurfaceNavigation(closeSurfaceWorkspace).catch(notify));
+el("surfaceDialog").addEventListener("cancel", (event) => { event.preventDefault(); void enqueueSurfaceNavigation(closeSurfaceWorkspace).catch(notify); });
+el("surfaceStageBack").addEventListener("click", () => void enqueueSurfaceNavigation(closeIntegratedSurface).catch(notify));
+el("surfaceStageExternal").addEventListener("click", () => {
+  const target = el("surfaceStageExternal").dataset.target;
+  if (target) window.open(target, "_blank", "noopener,noreferrer");
+});
+el("surfaceTabs").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-surface-tab]");
+  if (!button) return;
+  const surface = FLOYD_SURFACES.find((item) => item.id === button.dataset.surfaceTab);
+  if (!surface) return;
+  void enqueueSurfaceNavigation(() => openIntegratedSurface(surface)).catch(notify);
+});
 el("surfaceGrid").addEventListener("click", async (event) => {
   const openButton = event.target.closest("[data-surface-open]");
   const copyButton = event.target.closest("[data-surface-copy]");
@@ -1408,8 +1568,7 @@ el("surfaceGrid").addEventListener("click", async (event) => {
     const target = surfaceLaunchTarget(surface, activeSurfaceProject());
     if (!target) throw new Error("Select an active project before opening the TUI continuation.");
     if (openButton) {
-      if (app.surfaceAvailability.get(surface.id)?.verified !== true) throw new Error("Open is disabled until admitted source identity is verified.");
-      window.open(target, "_blank", "noopener,noreferrer");
+      await enqueueSurfaceNavigation(() => openIntegratedSurface(surface));
     }
     else await navigator.clipboard.writeText(target);
   } catch (error) { notify(error); }
@@ -1457,7 +1616,8 @@ if (remoteMode && handoffToken) {
 }
 await refreshHealth();
 await refreshState();
-try { await initializeExperience(); } catch (error) { if (token()) notify(error); }
+app.experienceReady = initializeExperience();
+try { await app.experienceReady; } catch (error) { if (token()) notify(error); }
 try { await completeOAuthCallback(); } catch (error) { notify(error); }
 if (query.get("settings") === "model") openModelSettings().catch(notify);
 </script>
