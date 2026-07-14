@@ -586,7 +586,7 @@ Douglas's current constraint is explicit: the workstation has RAM/VRAM capacity 
 
 Current read-only integration evidence:
 
-- OpenCode 1.17.15 is configured to use `zai-coding-plan/glm-4.6` by default and `zai-coding-plan/glm-4.5-air` for its small-model route.
+- The pinned OpenCode engine (currently 1.17.18) uses the approved `zai-coding-plan` provider profile; concrete model defaults remain governed by the Floyd agent spec and route receipt rather than this planning document.
 - OpenCode's credential inventory labels both a `Z.AI Coding Plan` credential and a `MiniMax Token Plan (minimaxi.com)` credential; no credential values were read.
 - No MiniMax model route is configured in OpenCode today, and the observed `minimaxi.com` label does not by itself settle whether the correct adapter is the China-domain or international MiniMax endpoint.
 - The existing OMP broker catalog knows Z.AI/Zhipu plan routes and MiniMax international/China route names, but catalog presence does not prove current auth or quota.

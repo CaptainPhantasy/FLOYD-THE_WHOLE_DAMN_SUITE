@@ -318,6 +318,20 @@ The authoritative, receipt-gated completion checklist lives at
 [`docs/PUNCHLIST.md`](docs/PUNCHLIST.md). The project is complete only when
 every item there is checked with evidence and blueprint gates A–H pass.
 
+## Ecosystem SDK Integration — 2026-07-13
+
+- [x] Verify all seven requested component remotes/local donors without editing donor trees.
+- [x] Connect the canonical repository to `CaptainPhantasy/FLOYD-THE_WHOLE_DAMN_SUITE` and preserve its initial history.
+- [x] Replace Floyd Core's handwritten OpenCode lifecycle/session/event calls with the exact-version official SDK adapter.
+- [x] Add the zero-runtime-dependency `@floyd/sdk` Core client with exact error propagation, SSE normalization, resume IDs, and abort cleanup.
+- [x] Migrate the existing Floyd CLI's request path to `@floyd/sdk`.
+- [x] Persist the seven-surface provenance and authority manifest in `ecosystem/surfaces.json`.
+- [ ] Admit independently writable copies of desktop, IDE, TUI, PTY, launcher, ADK, and mobile sources into their canonical targets.
+- [ ] Replace each admitted surface's direct backend/model ownership with `@floyd/sdk`.
+- [ ] Add launch, health, recovery, and cross-surface runtime acceptance receipts.
+- [ ] Publish verified logical commits to the whole-suite remote.
+- **Status:** in progress; foundational runtime/client boundary verified, surface admission not started.
+
 ## Plan Maintenance
 
 - Re-read this file before implementation and cutover decisions.

@@ -249,3 +249,17 @@ A 2026-07-12 audit found a self-resurrecting `com.floyd.core` launchd daemon, a 
 - **Intentional states documented (not changed)**:
   - `/opt/homebrew/bin/opencode` points to `/Users/douglastalley/.opencode/bin/opencode` (stock 1.17.15). No `opencode-superfloyd` target exists on disk, so this symlink was left as-is and is noted here.
   - `/Volumes/Storage/FLOYD_WORKSTATION/.supercache` is a symlink to `/Volumes/SanDisk1Tb/.supercache`. Current parity verified: both `VERSION` stamps read `1.7.2`. Cross-volume unmount risk remains; remediation (local copy or union mount) requires owner decision.
+
+## Ecosystem SDK integration — 2026-07-13
+
+- Canonical repository connected to `CaptainPhantasy/FLOYD-THE_WHOLE_DAMN_SUITE`; the unrelated initial remote history was preserved in merge commit `a104e47` rather than overwritten.
+- Existing unattended-engine hardening committed separately as `2074322` after 33/33 tests and typecheck passed.
+- Live start initially failed closed because `upstream.lock` pinned OpenCode 1.17.15 while the absolute binary reported 1.17.18 with SHA-256 `652a34ca…`. No guard was bypassed.
+- The installed binary was launched in an isolated temporary XDG environment. Loopback `/api/health`, `/api/session`, `/api/permission`, `/api/question`, `/api/event`, and current root routes were probed; the process was then stopped.
+- `upstream.lock` and `@opencode-ai/sdk` now match exact version 1.17.18. Core's session, prompt/steer, model switch, message, permission, question, health, and event calls now pass through `@floyd/opencode-runtime`.
+- Added `@floyd/sdk`: dependency-free bearer client, exact HTTP error object, typed Core operations, normalized SSE async generator, Last-Event-ID resume, reader cancellation, and AbortSignal propagation.
+- Existing CLI regular requests now use `@floyd/sdk`; the CLI does not import or connect to OpenCode.
+- Added `ecosystem/surfaces.json` for desktop, IDE, TUI, PTY, launcher, ADK, and mobile. Every entry explicitly prohibits direct OpenCode access.
+- Live runtime proof: Core started on `127.0.0.1:41414`, supervised OpenCode 1.17.18 on `127.0.0.1:41415`, CLI health returned both healthy, and a direct `OpenCodeSdkRuntime.health()` returned `true`; both processes were cleanly stopped.
+- Verification: 39/39 tests pass, TypeScript project references clean, production audit reports 0 vulnerabilities at all severities.
+- Sharp edges retained as open issues: Node 22.18.0 is below declared Node >=26; no launchd autostart; surface donors are inventoried but not copied/admitted; The_Burner has no local checkout; official OpenCode SDK adds daemon-only `cross-spawn` transitively.

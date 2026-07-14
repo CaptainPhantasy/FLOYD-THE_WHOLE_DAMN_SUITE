@@ -20,7 +20,7 @@ Read the planning documents in this order before doing implementation work:
 ## Architecture (implemented for the golden path; later phases still planned)
 
 - **Floyd Core** — a new persistent daemon, the *sole* durable ecosystem authority: projects, identity, sessions, runs/jobs, agents, skills, memory, worktree leases, artifacts, providers, policy, evidence, health/recovery.
-- **Upstream OpenCode** (pinned at observed local `1.17.15`, recorded in `upstream.lock`) — the managed coding engine, run as a loopback child with Floyd-owned config/data paths via its server/SDK interface. Never a deep fork, never a wrapped/scraped CLI, never `--auto`.
+- **Upstream OpenCode** (exact version and SHA-256 pinned in `upstream.lock`; currently `1.17.18`) — the managed coding engine, run as a loopback child with Floyd-owned config/data paths through `@floyd/opencode-runtime` and the official SDK. Never a deep fork, never a wrapped/scraped CLI, never `--auto`.
 - **Thin stateless Floyd OpenCode plugin/adapter** — carries project/run/actor/worktree/correlation IDs, gates sensitive tools, emits normalized evidence. It holds no authoritative state.
 - **CodeNomad-derived Cockpit** — the primary desktop/web client attached to the same Floyd/OpenCode state; a client, never a second control plane.
 - Floyd Core maps engine-local IDs beneath canonical ones: `floyd_project_id → floyd_session_id → floyd_run_id → floyd_job_id → {opencode_* ids, worktree_lease_id, artifact/evidence refs}`.
