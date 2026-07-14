@@ -326,6 +326,7 @@ every item there is checked with evidence and blueprint gates A–H pass.
 - [x] Add the zero-runtime-dependency `@floyd/sdk` Core client with exact error propagation, SSE normalization, resume IDs, and abort cleanup.
 - [x] Migrate the existing Floyd CLI's request path to `@floyd/sdk`.
 - [x] Persist the seven-surface provenance and authority manifest in `ecosystem/surfaces.json`.
+- [x] Create and validate independent clean intake copies for all seven surfaces; launcher clone uses `--no-local` and has distinct source/copy inodes.
 - [ ] Admit independently writable copies of desktop, IDE, TUI, PTY, launcher, ADK, and mobile sources into their canonical targets.
 - [ ] Replace each admitted surface's direct backend/model ownership with `@floyd/sdk`.
 - [ ] Add launch, health, recovery, and cross-surface runtime acceptance receipts.

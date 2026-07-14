@@ -272,3 +272,11 @@ A 2026-07-12 audit found a self-resurrecting `com.floyd.core` launchd daemon, a 
 - First rendered Chrome proof caught `TypeError: Illegal invocation` because native `window.fetch` had been stored unbound. `FloydBrowserClient` now binds native fetch; a regression test covers receiver-sensitive fetch.
 - Second rendered proof PASS: title `Floyd Workstation`; health `Core and engine online`; one `scratch-calc` project; 14 runs; no toast; no page errors; no emoji glyphs; no EventSource path. Selecting a real accepted run rendered two transcript rows, four inspector sections, accepted state, two engine jobs, five artifacts, and no page errors.
 - Security incident during proof cleanup: a process-list command printed the URL-bootstrap gateway token from Chrome's command line. The proof browser and Core were stopped, the token was rotated, and live auth verification returned old token HTTP 401 / new token HTTP 200. Future proof must avoid putting gateway tokens in process arguments.
+
+## Protected surface copies — 2026-07-13
+
+- Added and ran `scripts/prepare-surface-copies.sh`; originals were not modified.
+- Independent copies now exist under the git-ignored `intake/surfaces/` area for desktop, IDE, TUI, PTY, launcher, ADK, and mobile.
+- Remote copies are clean at: desktop `68ba0642603b`, IDE `1bec2197aa14`, TUI `c5d2b231733b`, PTY `b3a4d90286fb`, ADK `c70c9b3d7c87`, mobile `f1da3eb9a43a`. Launcher is a `--no-local` clone at `30d6717483b6`.
+- Validation PASS: all seven worktrees clean; no symlink points to a protected donor path; launcher representative source/copy inode identities differ (`16777260:35863503` vs `16777260:47836049`).
+- First validator run exited 1 after cloning because it selected the donor's untracked `.DS_Store` as the inode probe; the clone correctly lacked that file. The script now selects a tracked path via `git ls-files`, and the complete rerun exited 0.
