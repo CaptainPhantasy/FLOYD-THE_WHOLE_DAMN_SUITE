@@ -185,6 +185,36 @@ test("relay preserves provider errors delivered inside a successful SSE response
   }
 });
 
+test("relay reports a clean upstream EOF without a provider terminal as incomplete", async () => {
+  const upstream = createServer((_req, res) => {
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.end('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n');
+  });
+  const upstreamPort = await listen(upstream);
+  const relay = createServer((req, res) => { void relayProviderRequest(req, res).catch((error) => res.destroy(error)); });
+  const relayPort = await listen(relay);
+  try {
+    const response = await fetch(`http://127.0.0.1:${relayPort}/gateway`, {
+      method: "POST",
+      headers: {
+        authorization: "Bearer provider-secret",
+        "x-floyd-provider": "openai",
+        "x-floyd-base-url": `http://127.0.0.1:${upstreamPort}/v1`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ model: "gpt-test", messages: [{ role: "user", content: "hi" }], stream: true }),
+    });
+    assert.equal(response.status, 200);
+    assert.equal(await response.text(), [
+      'event: delta\ndata: {"text":"partial"}\n\n',
+      'event: error\ndata: {"error":{"type":"upstream_stream_incomplete","message":"provider stream ended before an explicit terminal event"}}\n\n',
+    ].join(""));
+  } finally {
+    await close(relay);
+    await close(upstream);
+  }
+});
+
 test("relay terminates an oversized provider SSE frame with a normalized error", async () => {
   const upstream = createServer((_req, res) => {
     res.writeHead(200, { "content-type": "text/event-stream" });

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { FloydApiError, FloydClient, FloydModelClient } from "../src/index.ts";
+import { FloydApiError, FloydClient, FloydModelClient, FloydStreamIncompleteError } from "../src/index.ts";
 
 test("client forwards bearer auth, JSON, and exact upstream errors", async () => {
   const seen: Request[] = [];
@@ -168,4 +168,22 @@ test("model driver uses connector references without exposing raw provider heade
       messages: [],
     })) { /* never reached */ }
   }, /exactly one/);
+});
+
+test("model driver rejects EOF without an explicit done or error terminal", async () => {
+  const fetchMock: typeof fetch = async () => new Response(
+    'event: delta\ndata: {"text":"partial"}\n\n',
+    { headers: { "content-type": "text/event-stream" } },
+  );
+  const client = new FloydModelClient({ token: "core-secret", fetch: fetchMock });
+  const received: unknown[] = [];
+  await assert.rejects(async () => {
+    for await (const event of client.streamChat({
+      route: { provider: "openai", apiKey: "provider-secret" },
+      model: "gpt-test",
+      messages: [{ role: "user", content: "hello" }],
+    })) received.push(event);
+  }, (error: unknown) => error instanceof FloydStreamIncompleteError
+    && error.code === "upstream_stream_incomplete");
+  assert.deepEqual(received, [{ type: "delta", data: { text: "partial" } }]);
 });

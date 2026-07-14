@@ -253,7 +253,19 @@ export async function relayProviderRequest(req: IncomingMessage, res: ServerResp
       upstream.on("end", () => {
         if (finished) return;
         if (buffer.trim()) consume(buffer);
-        if (!sentDone && !sentError) writeSse(res, "done", { finish_reason: "eof" });
+        // A clean TCP EOF is not a model-completion signal. Proxies and
+        // providers can truncate an SSE body while still closing the socket
+        // cleanly, so only an explicit provider terminal frame may become
+        // `done`. Anything else is a normalized terminal error.
+        if (!sentDone && !sentError) {
+          sentError = true;
+          writeSse(res, "error", {
+            error: {
+              type: "upstream_stream_incomplete",
+              message: "provider stream ended before an explicit terminal event",
+            },
+          });
+        }
         finished = true;
         res.end();
         resolve();

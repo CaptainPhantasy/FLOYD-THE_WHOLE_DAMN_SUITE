@@ -98,6 +98,16 @@ export class FloydApiError extends Error {
   }
 }
 
+/** Raised when a model SSE body ends without an explicit done/error frame. */
+export class FloydStreamIncompleteError extends Error {
+  readonly code = "upstream_stream_incomplete";
+
+  constructor() {
+    super("model stream ended before an explicit terminal event");
+    this.name = "FloydStreamIncompleteError";
+  }
+}
+
 /** Zero-runtime-dependency client used by every Floyd presentation surface. */
 export class FloydClient {
   readonly baseUrl: string;
@@ -469,13 +479,13 @@ export class FloydModelClient {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
+    let terminalSeen = false;
     try {
       for (;;) {
         const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true }).replace(/\r\n?/g, "\n");
+        buffer += (done ? decoder.decode() : decoder.decode(value, { stream: true })).replace(/\r\n?/g, "\n");
         const frames = buffer.split("\n\n");
-        buffer = frames.pop() ?? "";
+        buffer = done ? "" : (frames.pop() ?? "");
         for (const frame of frames) {
           let type: "delta" | "done" | "error" | null = null;
           const data: string[] = [];
@@ -487,8 +497,14 @@ export class FloydModelClient {
           }
           if (!type || data.length === 0) continue;
           yield { type, data: JSON.parse(data.join("\n")) as FloydModelEvent["data"] };
+          if (type === "done" || type === "error") {
+            terminalSeen = true;
+            return;
+          }
         }
+        if (done) break;
       }
+      if (!terminalSeen) throw new FloydStreamIncompleteError();
     } finally {
       // Cancelling the browser reader closes /gateway; Core's close listener
       // then destroys both the provider response and its outbound socket.

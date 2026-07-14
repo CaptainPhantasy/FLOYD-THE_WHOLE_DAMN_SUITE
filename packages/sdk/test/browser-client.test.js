@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { FloydApiError, FloydBrowserClient } from "../browser/floyd-sdk.js";
+import { FloydApiError, FloydBrowserClient, FloydStreamIncompleteError } from "../browser/floyd-sdk.js";
 
 test("browser client preserves Core status and error payload", async () => {
   const requests = [];
@@ -37,4 +37,46 @@ test("browser client calls an unbound fetch implementation safely", async () => 
   }
   const client = new FloydBrowserClient({ token: "token", fetch: receiverSensitiveFetch });
   assert.deepEqual(await client.health(), receiver);
+});
+
+test("browser model stream rejects EOF without an explicit terminal event", async () => {
+  const client = new FloydBrowserClient({
+    token: "browser-token",
+    fetch: async () => new Response(
+      'event: delta\ndata: {"text":"partial"}\n\n',
+      { headers: { "content-type": "text/event-stream" } },
+    ),
+  });
+  const received = [];
+  await assert.rejects(async () => {
+    for await (const event of client.modelStream({
+      provider: "openai",
+      apiKey: "provider-secret",
+      model: "gpt-test",
+      messages: [{ role: "user", content: "hello" }],
+    })) received.push(event);
+  }, (error) => error instanceof FloydStreamIncompleteError
+    && error.code === "upstream_stream_incomplete");
+  assert.deepEqual(received, [{ type: "delta", data: { text: "partial" } }]);
+});
+
+test("browser model stream surfaces an explicit provider error without replacing it", async () => {
+  const client = new FloydBrowserClient({
+    token: "browser-token",
+    fetch: async () => new Response(
+      'event: error\ndata: {"error":{"type":"overloaded","message":"try later"}}',
+      { headers: { "content-type": "text/event-stream" } },
+    ),
+  });
+  const received = [];
+  for await (const event of client.modelStream({
+    provider: "openai",
+    apiKey: "provider-secret",
+    model: "gpt-test",
+    messages: [{ role: "user", content: "hello" }],
+  })) received.push(event);
+  assert.deepEqual(received, [{
+    type: "error",
+    data: { error: { type: "overloaded", message: "try later" } },
+  }]);
 });

@@ -13,6 +13,15 @@ export class FloydApiError extends Error {
   }
 }
 
+/** Raised when a model SSE body ends without an explicit done/error frame. */
+export class FloydStreamIncompleteError extends Error {
+  constructor() {
+    super("model stream ended before an explicit terminal event");
+    this.name = "FloydStreamIncompleteError";
+    this.code = "upstream_stream_incomplete";
+  }
+}
+
 /** Browser build of the dependency-free Floyd Core client. */
 export class FloydBrowserClient {
   constructor({ baseUrl = "", token, fetch: fetchImpl = globalThis.fetch }) {
@@ -207,19 +216,27 @@ export class FloydBrowserClient {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
+    let terminalSeen = false;
     try {
       for (;;) {
         const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true }).replace(/\r\n?/g, "\n");
+        buffer += (done ? decoder.decode() : decoder.decode(value, { stream: true })).replace(/\r\n?/g, "\n");
         const frames = buffer.split("\n\n");
-        buffer = frames.pop() || "";
+        buffer = done ? "" : (frames.pop() || "");
         for (const frame of frames) {
           const type = frame.split("\n").find((line) => line.startsWith("event:"))?.slice(6).trim();
           const raw = frame.split("\n").filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trimStart()).join("\n");
-          if ((type === "delta" || type === "done" || type === "error") && raw) yield { type, data: JSON.parse(raw) };
+          if ((type === "delta" || type === "done" || type === "error") && raw) {
+            yield { type, data: JSON.parse(raw) };
+            if (type === "done" || type === "error") {
+              terminalSeen = true;
+              return;
+            }
+          }
         }
+        if (done) break;
       }
+      if (!terminalSeen) throw new FloydStreamIncompleteError();
     } finally {
       await reader.cancel().catch(() => {});
       reader.releaseLock();
