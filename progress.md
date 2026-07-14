@@ -318,3 +318,20 @@ A 2026-07-12 audit found a self-resurrecting `com.floyd.core` launchd daemon, a 
 - Douglas removed ADKv2Agent and The_Burner from the active integration list before work began on either component.
 - Neither protected donor nor either intake copy was modified. Existing intake directories remain untouched as historical provenance; they are excluded from the active manifest and copy-preparation loop rather than deleted.
 - The active five-surface system is Desktop, IDE, OhMyFloyd, TerminalOne, and harness-launcher. OhMyFloyd is the only component integration still pending.
+
+## OhMyFloyd Core integration — 2026-07-14
+
+- Edited only `/Volumes/Storage/FLOYD_WORKSTATION/intake/surfaces/tui`; the modified donor at `/Volumes/SanDisk1Tb/OhMyFloyd` was not used as a worktree and was not changed.
+- Added a zero-dependency `@floyd/sdk` workspace package with exact Core errors, normalized SSE parsing, Last-Event-ID support, AbortSignal propagation, and reader cleanup.
+- `omp` now defaults to a Floyd Core natural-language coding pane. It supports run submission, active-session steer, question answers, one-time/always/reject permission decisions, run attachment, and accept/reject/escalate review. `omp launch` remains an explicit legacy direct-provider migration command.
+- The pane imports no provider SDK or provider credential controls. It reads only the 0600 loopback Core token; Floyd Core owns OpenCode, provider credentials, durable sessions, tools, policy, and review state.
+- First live smoke exposed an accidental native-addon dependency caused by importing the old editor/theme stack. The Floyd pane now uses pure TypeScript TUI primitives, so status and interactive mode work without a compiled native addon.
+- Dependency audit initially found 28 production vulnerabilities inherited from legacy provider/browser/XML dependencies. Same-major transitive overrides and a Turbo patch update reduced both production and complete audits to zero; the new Floyd SDK itself has no registry dependencies.
+- Verification passed: coding-agent package check, Floyd SDK check, Rust fmt/clippy, exact 429/SSE/reader-cancel contract simulation, live default and explicit Floyd status against Core PID 55182/OpenCode PID 55188, rendered tmux `/help` proof, and clean Ctrl+C termination. The root monorepo `bun check` wrapper still fails on unrelated pre-existing formatter debt under `packages/agent` and old TUI tests; its coding-agent and Rust legs pass independently.
+- Component commit `3121bce7acd64c6801003a47d9e2d030d470233f` pushed to `CaptainPhantasy/OhMyFloyd` branch `feat/floyd-core-runtime`.
+
+## Five-surface acceptance — 2026-07-14
+
+- `scripts/prepare-surface-copies.sh` verified clean independent copies at Desktop `3eba9b3019ff`, IDE `e094896512d9`, OhMyFloyd `3121bce7acd6`, TerminalOne `d6c652f2a9bc`, and launcher `5caf75615d34`; launcher source/copy inode separation remains true.
+- `scripts/verify-active-surfaces.sh` verified the manifest contains exactly those five surfaces, every current Git head matches its pinned integration commit, every copy is clean, direct OpenCode ownership is false, every production audit count is zero, and live Floyd Core PID 55182 reports managed OpenCode PID 55188 healthy. The token is read inside the Node verifier and never placed in process arguments.
+- Canonical suite verification passed: 43/43 tests, TypeScript project references, production audit, complete audit, and `git diff --check`. Node 22.18 still emits the declared Node >=26 engine warning; the commands nonetheless exited zero.

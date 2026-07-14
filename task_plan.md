@@ -325,18 +325,18 @@ every item there is checked with evidence and blueprint gates A–H pass.
 - [x] Replace Floyd Core's handwritten OpenCode lifecycle/session/event calls with the exact-version official SDK adapter.
 - [x] Add the zero-runtime-dependency `@floyd/sdk` Core client with exact error propagation, SSE normalization, resume IDs, and abort cleanup.
 - [x] Migrate the existing Floyd CLI's request path to `@floyd/sdk`.
-- [x] Persist the seven-surface provenance and authority manifest in `ecosystem/surfaces.json`.
-- [x] Create and validate independent clean intake copies for all seven surfaces; launcher clone uses `--no-local` and has distinct source/copy inodes.
+- [x] Persist the five-active-surface provenance and authority manifest in `ecosystem/surfaces.json`; ADKv2Agent and The_Burner are explicitly out of scope.
+- [x] Create and validate independent clean intake copies for all five active surfaces; launcher clone uses `--no-local` and has distinct source/copy inodes.
 - [x] Remove ADKv2Agent and The_Burner from the active integration scope before either was modified; retain their prior intake copies only as untouched historical evidence.
 - [ ] Admit independently writable copies of the five active sources (desktop, IDE, TUI, PTY, launcher) into their canonical targets.
-- [ ] Replace each active surface's direct backend/model ownership with `@floyd/sdk`.
+- [x] Replace each active surface's default backend/model ownership with `@floyd/sdk`; explicit legacy migration paths remain documented where removal would be breaking.
 - [x] Route the Desktop coding pane through a server-side `@floyd/sdk` bridge, preserve Core errors, propagate aborts, remove provider-key UI and emoji, bind the bridge to loopback, and record verified component head `3eba9b3`.
 - [x] Route the IDE coding pane through a server-side `@floyd/sdk` bridge and prove folder-as-workspace behavior, Core health, rendered pane state, and component commit `e094896`.
 - [x] Route TerminalOne through a server-side `@floyd/sdk` health bridge and a trusted PTY action that prepares the canonical Core CLI; prove exact error forwarding, loopback binding, live Core/OpenCode output, rendered state, and pushed component head `d6c652f`.
 - [x] Add Floyd Core to the launcher's single-source harness registry, route health through the server-side SDK, prove upstream abort propagation and all 16 harnesses, and record independent-copy head `5caf756` without pushing into its protected local donor.
-- [ ] Add launch, health, recovery, and cross-surface runtime acceptance receipts.
+- [x] Add launch, health, recovery, and cross-surface runtime acceptance receipts, including exact five-surface Git heads and live Core/OpenCode health.
 - [ ] Publish verified logical commits to the whole-suite remote.
-- **Status:** in progress; Desktop, IDE, PTY, and launcher integrations are verified. OhMyFloyd is the only remaining active component integration.
+- **Status:** complete; all five active component copies are verified, pinned in the manifest, and published where a remote exists.
 
 ## Plan Maintenance
 
