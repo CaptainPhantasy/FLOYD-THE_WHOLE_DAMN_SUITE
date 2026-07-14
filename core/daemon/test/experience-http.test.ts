@@ -15,7 +15,7 @@ mkdirSync(join(runtimeRoot, "core"), { recursive: true, mode: 0o700 });
 
 const { openDb } = await import("../src/db.ts");
 const { gatewayToken } = await import("../src/config.ts");
-const { startGateway, startRemoteGateway, pumpSessionChannel } = await import("../src/http.ts");
+const { startGateway, startRemoteGateway, pumpSessionChannel, writeRunEvent } = await import("../src/http.ts");
 const { synchronizePendingInteractions } = await import("../src/experience.ts");
 const { putArtifact, linkRunArtifact } = await import("../src/artifacts.ts");
 
@@ -118,6 +118,19 @@ async function remoteSelfAuthenticatedPost(path: string, body: unknown, origin =
   });
 }
 
+test("run SSE writer destroys slow clients instead of buffering indefinitely", () => {
+  let destroyedWith: Error | undefined;
+  const response = {
+    write: () => false,
+    destroy(error?: Error) {
+      destroyedWith = error;
+      return this;
+    },
+  } as never;
+  assert.equal(writeRunEvent(response, "event: test\ndata: {}\n\n"), false);
+  assert.match(destroyedWith?.message ?? "", /backpressure limit/);
+});
+
 test("HTTP experience integration negotiates, streams, updates, and preserves conflicts", async () => {
   const queryAuth = await fetch(`${baseUrl}/api/health?token=${encodeURIComponent(gatewayToken())}`);
   assert.equal(queryAuth.status, 401);
@@ -159,6 +172,26 @@ test("HTTP experience integration negotiates, streams, updates, and preserves co
   } finally {
     streamAbort.abort();
     await reader.cancel().catch(() => {});
+  }
+
+  const futureAbort = new AbortController();
+  const futureStream = await api("/api/experience/primary/stream", {
+    headers: { accept: "text/event-stream", "last-event-id": "999999" },
+    signal: futureAbort.signal,
+  });
+  const futureReader = futureStream.body!.getReader();
+  let futureText = "";
+  try {
+    for (let readCount = 0; readCount < 4 && !futureText.includes("event: experience"); readCount += 1) {
+      const next = await futureReader.read();
+      if (next.done) break;
+      futureText += new TextDecoder().decode(next.value);
+    }
+    assert.match(futureText, /event: experience/);
+    assert.match(futureText, /"revision":1/);
+  } finally {
+    futureAbort.abort();
+    await futureReader.cancel().catch(() => {});
   }
 
   const updatedResponse = await api("/api/experience/primary", {

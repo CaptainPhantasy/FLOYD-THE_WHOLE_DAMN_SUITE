@@ -132,6 +132,42 @@ test("cockpit's actual 409 path retains conflicting Core state and retries only 
   assert.equal(merged.composer_draft, "local");
 });
 
+test("cockpit preserves a pending local draft when a newer remote draft arrives", async () => {
+  const start = html.indexOf("function draftChangeConflicts");
+  const end = html.indexOf("function clearPendingCursorSave", start);
+  const callbacks: Array<() => Promise<void>> = [];
+  const writes: Array<Record<string, unknown>> = [];
+  const notices: Error[] = [];
+  const app = {
+    envelope: { revision: 1, composer_draft: "base" },
+    draftBase: null,
+    draftLocalValue: "",
+    draftDiverged: false,
+    draftTimer: null,
+  };
+  const schedule = new Function(
+    "app", "patchEnvelope", "notify", "setTimeout", "clearTimeout",
+    `${html.slice(start, end)}; return scheduleDraftSave;`,
+  )(
+    app,
+    async (change: Record<string, unknown>) => { writes.push(change); },
+    (error: Error) => notices.push(error),
+    (callback: () => Promise<void>) => { callbacks.push(callback); return callbacks.length; },
+    () => {},
+  ) as (value: string) => void;
+
+  schedule("local");
+  app.envelope = { revision: 2, composer_draft: "remote" };
+  await callbacks.shift()!();
+  assert.deepEqual(writes, []);
+  assert.equal(app.draftDiverged, true);
+  assert.match(notices[0]?.message ?? "", /changed on another surface/);
+
+  schedule("local explicit edit");
+  await callbacks.shift()!();
+  assert.deepEqual(writes, [{ composer_draft: "local explicit edit" }]);
+});
+
 test("cockpit deduplicates only provider parts proven present in the transcript snapshot", () => {
   const start = html.indexOf("function deduplicatedLiveText");
   const end = html.indexOf("async function refreshHealth");
@@ -298,4 +334,97 @@ test("cockpit serializes overlapping active-run publications and leaves the newe
   assert.deepEqual(publications, ["run-a", "run-b"]);
   assert.deepEqual(attachments, ["run-b"]);
   assert.equal(app.currentRunId, "run-b");
+});
+
+test("cockpit drops buffered attach events after abort and run selection change", async () => {
+  const start = html.indexOf("function attachmentIsCurrent");
+  const end = html.indexOf("async function sendPrompt", start);
+  let release!: () => void;
+  const blocked = new Promise<void>((resolve) => { release = resolve; });
+  const cursors: unknown[] = [];
+  const transcriptRestores: unknown[] = [];
+  const patches: unknown[] = [];
+  const app = {
+    runSelectionGeneration: 1,
+    currentRunId: "run-a",
+    currentSessionId: "session-a",
+    envelope: { transcript_epoch: "epoch-a" },
+    streamAbort: null,
+  };
+  const attach = new Function(
+    "app", "client", "actor", "patchEnvelope", "restoreTranscriptSnapshot", "scheduleCursorSave",
+    "deduplicatedLiveText", "addEntry", "notify", "AbortController",
+    `${html.slice(start, end)}; return attachSession;`,
+  )(
+    app,
+    {
+      async *attachSession() {
+        await blocked;
+        yield { id: "41", type: "transcript", data: { messages: [{ id: "old" }] } };
+      },
+    },
+    "test",
+    async (change: unknown) => { patches.push(change); },
+    (...args: unknown[]) => transcriptRestores.push(args),
+    (...args: unknown[]) => cursors.push(args),
+    () => "",
+    () => {},
+    () => {},
+    AbortController,
+  ) as (runId: string, sessionId: string, generation: number) => void;
+
+  attach("run-a", "session-a", 1);
+  const oldController = app.streamAbort as unknown as AbortController;
+  app.runSelectionGeneration = 2;
+  app.currentRunId = "run-b";
+  app.currentSessionId = "session-b";
+  oldController.abort();
+  release();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(transcriptRestores, []);
+  assert.deepEqual(cursors, []);
+  assert.deepEqual(patches, []);
+});
+
+test("cockpit reconnects the experience watch with capped delay and a fresh restore", async () => {
+  const start = html.indexOf("function experienceRetryDelay");
+  const end = html.indexOf("async function initializeExperience", start);
+  const controller = new AbortController();
+  let watchCalls = 0;
+  const restored: number[] = [];
+  const notices: unknown[] = [];
+  const app = { envelope: { revision: 1 } };
+  const helpers = new Function(
+    "app", "client", "envelopeId", "restoreEnvelope", "notify", "setTimeout", "clearTimeout",
+    `${html.slice(start, end)}; return { experienceRetryDelay, watchExperienceWithReconnect };`,
+  )(
+    app,
+    {
+      watchExperience() {
+        watchCalls += 1;
+        if (watchCalls === 1) return (async function* () { throw new Error("transient"); })();
+        return (async function* () {
+          yield { type: "experience", data: { revision: 3 } };
+          controller.abort();
+        })();
+      },
+      async experience() { return { revision: 2 }; },
+    },
+    "primary",
+    async (envelope: { revision: number }) => { app.envelope = envelope; restored.push(envelope.revision); },
+    (error: unknown) => notices.push(error),
+    setTimeout,
+    clearTimeout,
+  ) as {
+    experienceRetryDelay: (attempt: number) => number;
+    watchExperienceWithReconnect: (controller: AbortController) => Promise<void>;
+  };
+
+  assert.equal(helpers.experienceRetryDelay(0), 250);
+  assert.equal(helpers.experienceRetryDelay(20), 4000);
+  await helpers.watchExperienceWithReconnect(controller);
+  assert.equal(watchCalls, 2);
+  assert.deepEqual(restored, [2, 3]);
+  assert.equal(notices.length, 1);
 });

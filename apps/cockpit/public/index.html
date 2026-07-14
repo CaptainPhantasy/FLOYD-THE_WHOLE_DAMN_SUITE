@@ -226,6 +226,9 @@ const app = {
   envelope: null,
   envelopeAbort: null,
   draftTimer: null,
+  draftBase: null,
+  draftLocalValue: "",
+  draftDiverged: false,
   cursorTimer: null,
   cursorPending: null,
   restoringEnvelope: false,
@@ -327,10 +330,35 @@ function queueActiveContextPublish(generation, change) {
   return queued;
 }
 
+function draftChangeConflicts(base, latest, value) {
+  return latest.revision !== base.revision
+    && latest.composer_draft !== base.composer_draft
+    && latest.composer_draft !== value;
+}
+
 function scheduleDraftSave(value) {
+  if (!app.envelope) return;
+  if (!app.draftBase || app.draftDiverged) {
+    app.draftBase = { revision: app.envelope.revision, composer_draft: app.envelope.composer_draft };
+    app.draftDiverged = false;
+  }
+  app.draftLocalValue = value;
   clearTimeout(app.draftTimer);
-  app.draftTimer = setTimeout(() => {
-    patchEnvelope({ composer_draft: value }).catch(notify);
+  app.draftTimer = setTimeout(async () => {
+    app.draftTimer = null;
+    const base = app.draftBase;
+    if (!base || value !== app.draftLocalValue) return;
+    if (draftChangeConflicts(base, app.envelope, value)) {
+      app.draftDiverged = true;
+      notify(new Error("Draft changed on another surface. Your local text was kept; edit it again to explicitly replace the remote draft."));
+      return;
+    }
+    try {
+      await patchEnvelope({ composer_draft: value });
+      if (value === app.draftLocalValue) app.draftBase = null;
+    } catch (error) {
+      notify(error);
+    }
   }, 350);
 }
 
@@ -340,14 +368,18 @@ function clearPendingCursorSave() {
   app.cursorPending = null;
 }
 
-function scheduleCursorSave(eventId) {
+function scheduleCursorSave(
+  eventId,
+  originatingRunId = app.currentRunId,
+  originatingEpoch = app.envelope?.transcript_epoch ?? null,
+) {
   const cursor = Number(eventId);
   if (!Number.isFinite(cursor)) return;
   app.cursorPending = {
     cursor,
     eventId: String(eventId),
-    runId: app.currentRunId,
-    epoch: app.envelope?.transcript_epoch ?? null,
+    runId: originatingRunId,
+    epoch: originatingEpoch,
   };
   if (app.cursorTimer) return;
   app.cursorTimer = setTimeout(() => {
@@ -370,7 +402,11 @@ async function restoreEnvelope(envelope) {
       model: envelope.model_route?.model || "",
       baseUrl: envelope.model_route?.base_url || "",
     };
-    if (document.activeElement !== el("prompt")) el("prompt").value = envelope.composer_draft || "";
+    if (document.activeElement !== el("prompt") && !app.draftBase) {
+      app.draftLocalValue = envelope.composer_draft || "";
+      app.draftDiverged = false;
+      el("prompt").value = app.draftLocalValue;
+    }
     const runId = envelope.active?.run_id;
     if (runId && runId !== app.currentRunId && app.state.runs.some((run) => run.id === runId)) {
       await selectRun(runId, { publish: false });
@@ -393,6 +429,51 @@ async function restoreEnvelope(envelope) {
   }
 }
 
+function experienceRetryDelay(attempt) {
+  return Math.min(250 * (2 ** attempt), 4000);
+}
+
+function abortableDelay(ms, signal) {
+  return new Promise((resolve) => {
+    if (signal.aborted) return resolve();
+    const timer = setTimeout(done, ms);
+    function done() {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", done);
+      resolve();
+    }
+    signal.addEventListener("abort", done, { once: true });
+  });
+}
+
+async function watchExperienceWithReconnect(controller) {
+  let attempt = 0;
+  while (!controller.signal.aborted) {
+    try {
+      for await (const event of client.watchExperience(envelopeId, {
+        lastEventId: String(app.envelope?.revision || 0),
+        signal: controller.signal,
+      })) {
+        attempt = 0;
+        if (event.type === "experience" && event.data?.revision > (app.envelope?.revision || 0)) {
+          await restoreEnvelope(event.data);
+        }
+      }
+      if (!controller.signal.aborted) throw new Error("Experience stream ended");
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      notify(error);
+      await abortableDelay(experienceRetryDelay(attempt++), controller.signal);
+      if (controller.signal.aborted) return;
+      try {
+        await restoreEnvelope(await client.experience(envelopeId, controller.signal));
+      } catch (restoreError) {
+        if (!controller.signal.aborted) notify(restoreError);
+      }
+    }
+  }
+}
+
 async function initializeExperience() {
   await client.negotiateExperience({
     surface_id: surfaceId,
@@ -404,20 +485,7 @@ async function initializeExperience() {
   app.envelopeAbort?.abort();
   const controller = new AbortController();
   app.envelopeAbort = controller;
-  void (async () => {
-    try {
-      for await (const event of client.watchExperience(envelopeId, {
-        lastEventId: String(app.envelope?.revision || 0),
-        signal: controller.signal,
-      })) {
-        if (event.type === "experience" && event.data?.revision > (app.envelope?.revision || 0)) {
-          await restoreEnvelope(event.data);
-        }
-      }
-    } catch (error) {
-      if (!controller.signal.aborted) notify(error);
-    }
-  })();
+  void watchExperienceWithReconnect(controller);
 }
 
 function transcript(runId) {
@@ -691,15 +759,23 @@ async function selectRun(runId, { publish = true } = {}) {
     });
     if (!published || selectionGeneration !== app.runSelectionGeneration || runId !== app.currentRunId) return;
   }
-  attachSession(runId, app.currentSessionId);
+  attachSession(runId, app.currentSessionId, selectionGeneration);
 }
 
-function attachSession(runId, sessionId) {
+function attachmentIsCurrent(controller, runId, sessionId, selectionGeneration) {
+  return !controller.signal.aborted
+    && selectionGeneration === app.runSelectionGeneration
+    && runId === app.currentRunId
+    && sessionId === app.currentSessionId;
+}
+
+function attachSession(runId, sessionId, selectionGeneration) {
   const controller = new AbortController();
   app.streamAbort = controller;
   void (async () => {
     try {
       for await (const event of client.attachSession(sessionId, actor, { signal: controller.signal, runId })) {
+        if (!attachmentIsCurrent(controller, runId, sessionId, selectionGeneration)) break;
         if (event.type === "hello") {
           const epoch = event.data?.stream_epoch;
           if (epoch && epoch !== app.envelope?.transcript_epoch) {
@@ -709,10 +785,10 @@ function attachSession(runId, sessionId) {
         }
         if (event.type === "transcript") {
           restoreTranscriptSnapshot(runId, event.data?.messages);
-          if (event.id) scheduleCursorSave(event.id);
+          if (event.id) scheduleCursorSave(event.id, runId, app.envelope?.transcript_epoch ?? null);
           continue;
         }
-        if (event.id) scheduleCursorSave(event.id);
+        if (event.id) scheduleCursorSave(event.id, runId, app.envelope?.transcript_epoch ?? null);
         const payload = event.data || {};
         const data = payload.data || {};
         if (event.type === "token" && payload.channel === "text") {

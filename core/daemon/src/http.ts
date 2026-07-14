@@ -143,7 +143,20 @@ export function broadcast(event: string, data: unknown, runId?: string): void {
   for (const c of sseClients) {
     if (runId && c.run_id && c.run_id !== runId) continue;
     if (!runId && c.run_id) continue; // run-scoped clients only get their run's events
-    try { c.res.write(msg); } catch { sseClients.delete(c); }
+    if (!writeRunEvent(c.res, msg)) sseClients.delete(c);
+  }
+}
+
+/** Run/event streams are live-only; a slow reader is cut off instead of accumulating an unbounded buffer. */
+export function writeRunEvent(res: Pick<ServerResponse, "write" | "destroy">, message: string): boolean {
+  try {
+    if (!res.write(message)) {
+      res.destroy(new Error("run stream backpressure limit reached"));
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -827,7 +840,9 @@ function createGateway(
           res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
           if (remotePrincipal) registerRemoteStream(res, remotePrincipal);
           res.write(`event: hello\ndata: ${JSON.stringify({ envelope_id: envelopeId, revision: envelope.revision })}\n\n`);
-          if (lastRevision < envelope.revision && !writeExperienceEvent(res, envelope, Boolean(remotePrincipal))) return;
+          // A client can be ahead after Core restores an older durable snapshot.
+          // Any unequal revision therefore receives authoritative current state.
+          if (lastRevision !== envelope.revision && !writeExperienceEvent(res, envelope, Boolean(remotePrincipal))) return;
           const client = { res, envelope_id: envelopeId, principal: remotePrincipal };
           experienceClients.add(client);
           res.on("close", () => experienceClients.delete(client));
@@ -1280,7 +1295,7 @@ function createGateway(
         ensureRemoteStreamCapacity(remotePrincipal);
         res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
         if (remotePrincipal) registerRemoteStream(res, remotePrincipal);
-        res.write(`event: hello\ndata: ${JSON.stringify({ run_id: runId })}\n\n`);
+        if (!writeRunEvent(res, `event: hello\ndata: ${JSON.stringify({ run_id: runId })}\n\n`)) return;
         const client = { res, run_id: runId };
         sseClients.add(client);
         res.on("close", () => sseClients.delete(client));
@@ -1376,7 +1391,7 @@ function createGateway(
       }
       if (path === "/api/events") {
         res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
-        res.write(`event: hello\ndata: {"service":"floyd-core"}\n\n`);
+        if (!writeRunEvent(res, `event: hello\ndata: {"service":"floyd-core"}\n\n`)) return;
         const client = { res };
         sseClients.add(client);
         res.on("close", () => sseClients.delete(client));
