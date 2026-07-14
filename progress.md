@@ -290,7 +290,7 @@ A 2026-07-12 audit found a self-resurrecting `com.floyd.core` launchd daemon, a 
 - Replaced `uuid` with Node `crypto.randomUUID()`. Updated Electron, Express, Puppeteer, and WebSocket dependencies plus narrowly scoped transitive overrides. Production audit moved from 13 advisories (including one critical) to zero; dev-only audit findings remain outside the production graph.
 - Build passed, Vitest passed 6/6, production audit found zero vulnerabilities, live Desktop `/api/core/health` returned HTTP 200 with Core and OpenCode healthy, and rendered Puppeteer proof showed the Core route, no provider-key UI, no emoji, and no page errors.
 - Live launch also exposed a donor crash on occupied MCP port 3005. The auxiliary port is now configurable and bind failure degrades only the Chrome extension bridge; Desktop stayed online during the repeated occupied-port proof.
-- Component commit `11015cf9f8dba2cb5dc81a16b4e131ea234140a0` pushed to `CaptainPhantasy/floyd-desktop-web-v2` branch `feat/floyd-core-runtime`.
+- Component commits `11015cf9f8dba2cb5dc81a16b4e131ea234140a0` and security follow-up `3eba9b3019ff0488d650a5a48d7beed27612f837` pushed to `CaptainPhantasy/floyd-desktop-web-v2` branch `feat/floyd-core-runtime`. The follow-up removes wildcard CORS and binds Desktop to `127.0.0.1` by default so the Core bridge is not exposed as a LAN-wide confused deputy.
 
 ## IDE Core and folder-workspace integration — 2026-07-14
 

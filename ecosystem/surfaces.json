@@ -23,7 +23,7 @@
       "integration": {
         "status": "verified_component_branch",
         "branch": "feat/floyd-core-runtime",
-        "commit": "11015cf9f8dba2cb5dc81a16b4e131ea234140a0",
+        "commit": "3eba9b3019ff0488d650a5a48d7beed27612f837",
         "remote_ref": "origin/feat/floyd-core-runtime",
         "contract": "vendored @floyd/sdk -> server-side Floyd Core bridge -> managed OpenCode SDK",
         "production_audit_vulnerabilities": 0,
