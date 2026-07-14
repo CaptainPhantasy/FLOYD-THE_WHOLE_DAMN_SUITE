@@ -118,6 +118,15 @@ CREATE TABLE IF NOT EXISTS evidence_events (
   payload_json TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS experience_envelopes (
+  id TEXT PRIMARY KEY,
+  schema_version TEXT NOT NULL,
+  revision INTEGER NOT NULL,
+  payload_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  updated_by_device_id TEXT
+);
+
 -- append-only enforcement: any UPDATE or DELETE on evidence fails at the engine
 CREATE TRIGGER IF NOT EXISTS evidence_no_update
   BEFORE UPDATE ON evidence_events

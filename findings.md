@@ -1,5 +1,13 @@
 # FLOYD Ecosystem Unification — Findings and Decisions
 
+## Portable experience envelope audit — 2026-07-14
+
+- Core currently persists projects, sessions, runs, jobs, leases, artifacts, provider profiles, skills, memory, and append-only evidence. It does not persist presentation continuity: active run/view, transcript cursor, unsent draft, selected artifact, or surface capabilities.
+- Cockpit currently keeps `currentRunId`, current session, model route, transcript map, and composer contents in browser memory/session storage. A reload or another surface therefore reconstructs backend truth but cannot resume the exact visible experience.
+- The existing session channel already supplies the hard execution primitive: multiple surfaces attach to the same Core session, replay from Last-Event-ID, and receive pending question/permission snapshots. The new layer must reuse this channel and must not introduce a second session authority.
+- `docs/PUNCHLIST.md` and the blueprint already require actor/device rows, device-scoped tokens, private-overlay access, revocation, and a visible kill switch. The current single gateway bearer is explicitly a temporary local-only boundary.
+- The first implementation slice is a versioned `ExperienceEnvelope` with optimistic revisions. It persists only credential references, never provider secrets; pending engine asks are hydrated by Core from the active engine session rather than accepted as client-authored truth.
+
 ## Requirements
 
 - Unify the named FLOYD projects into one coherent local workstation ecosystem inspired by the integration quality of the Anthropic ecosystem, while remaining Douglas-and-FLOYD-specific.

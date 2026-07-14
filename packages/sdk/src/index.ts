@@ -1,4 +1,24 @@
-import type { EvidenceEvent, Job, Lease, Project, ProviderProfile, Run, Session } from "@floyd/contracts";
+import {
+  FLOYD_EXPERIENCE_VERSION,
+  FLOYD_SDK_PROTOCOL_VERSION,
+  type EvidenceEvent,
+  type ExperienceEnvelope,
+  type ExperienceEnvelopePatch,
+  type ExperienceDeviceEnrollment,
+  type AuthenticatedExperienceDevice,
+  type ExperienceHandoffConsumption,
+  type ExperienceHandoffIssue,
+  type ExperienceNegotiationRequest,
+  type ExperienceNegotiationResult,
+  type Job,
+  type Lease,
+  type Project,
+  type ProviderProfile,
+  type Run,
+  type Session,
+} from "@floyd/contracts";
+
+export { FLOYD_EXPERIENCE_VERSION, FLOYD_SDK_PROTOCOL_VERSION };
 
 export const DEFAULT_FLOYD_CORE_URL = "http://127.0.0.1:41414";
 
@@ -15,12 +35,22 @@ export interface FloydState {
   jobs: Job[];
   leases: Lease[];
   provider_profiles: ProviderProfile[];
+  experience: ExperienceEnvelope;
 }
 
 export interface FloydStreamEvent<T = unknown> {
   id?: string;
   type: string;
   data: T;
+}
+
+export interface FloydExperienceNegotiationInput {
+  surface_id: string;
+  capabilities: string[];
+  /** Defaults to this SDK's protocol version. Override only for compatibility tests. */
+  sdk_version?: string;
+  /** Defaults to the envelope versions understood by this SDK release. */
+  supported_envelope_versions?: string[];
 }
 
 export type FloydModelProvider = "opencode-zen" | "opencode-go" | "openai" | "anthropic" | "auto";
@@ -115,20 +145,24 @@ export class FloydClient {
     return this.request("GET", `/api/runs/${encodeURIComponent(runId)}`, undefined, signal);
   }
 
+  artifactById(artifactId: string, signal?: AbortSignal): Promise<unknown> {
+    return this.request("GET", `/api/artifacts/${encodeURIComponent(artifactId)}`, undefined, signal);
+  }
+
   evidence(runId?: string, signal?: AbortSignal): Promise<{ events: EvidenceEvent[] }> {
     const query = runId ? `?run_id=${encodeURIComponent(runId)}` : "";
     return this.request("GET", `/api/evidence${query}`, undefined, signal);
   }
 
-  steer(sessionId: string, text: string, actor: string, signal?: AbortSignal): Promise<Record<string, unknown>> {
+  steer(sessionId: string, text: string, actor: string, signal?: AbortSignal, runId?: string): Promise<Record<string, unknown>> {
     return this.request("POST", `/api/sessions/${encodeURIComponent(sessionId)}/steer`, {
-      type: "steer", text, actor,
+      type: "steer", text, actor, ...(runId ? { run_id: runId } : {}),
     }, signal);
   }
 
-  answer(sessionId: string, requestId: string, answers: string[][], actor: string, signal?: AbortSignal): Promise<Record<string, unknown>> {
+  answer(sessionId: string, requestId: string, answers: string[][], actor: string, signal?: AbortSignal, runId?: string): Promise<Record<string, unknown>> {
     return this.request("POST", `/api/sessions/${encodeURIComponent(sessionId)}/steer`, {
-      type: "answer", request_id: requestId, answers, actor,
+      type: "answer", request_id: requestId, answers, actor, ...(runId ? { run_id: runId } : {}),
     }, signal);
   }
 
@@ -138,10 +172,107 @@ export class FloydClient {
     reply: "once" | "always" | "reject",
     actor: string,
     signal?: AbortSignal,
+    runId?: string,
   ): Promise<Record<string, unknown>> {
     return this.request("POST", `/api/sessions/${encodeURIComponent(sessionId)}/steer`, {
-      type: "permission", request_id: requestId, reply, actor,
+      type: "permission", request_id: requestId, reply, actor, ...(runId ? { run_id: runId } : {}),
     }, signal);
+  }
+
+  /**
+   * Negotiate the portable experience protocol before a surface attaches.
+   * Core returns HTTP 426 unchanged when this SDK/envelope combination cannot
+   * participate, allowing the surface to render the actual upgrade guidance.
+   */
+  negotiateExperience(
+    input: FloydExperienceNegotiationInput,
+    signal?: AbortSignal,
+  ): Promise<ExperienceNegotiationResult> {
+    const request: ExperienceNegotiationRequest = {
+      surface_id: input.surface_id,
+      sdk_version: input.sdk_version ?? FLOYD_SDK_PROTOCOL_VERSION,
+      supported_envelope_versions: input.supported_envelope_versions ?? [FLOYD_EXPERIENCE_VERSION],
+      capabilities: input.capabilities,
+    };
+    return this.request("POST", "/api/experience/negotiate", request, signal);
+  }
+
+  experience(envelopeId = "primary", signal?: AbortSignal): Promise<ExperienceEnvelope> {
+    return this.request("GET", `/api/experience/${encodeURIComponent(envelopeId)}`, undefined, signal);
+  }
+
+  /**
+   * Apply an optimistic update. expected_revision is mandatory in the contract;
+   * a stale writer receives Core's exact HTTP 409 payload rather than a retry
+   * that could silently overwrite another surface's draft or selected context.
+   */
+  updateExperience(
+    envelopeId: string,
+    patch: ExperienceEnvelopePatch,
+    signal?: AbortSignal,
+  ): Promise<ExperienceEnvelope> {
+    return this.request("PATCH", `/api/experience/${encodeURIComponent(envelopeId)}`, patch, signal);
+  }
+
+  /**
+   * Watch the authoritative envelope. Last-Event-ID resumes after the caller's
+   * last applied revision; stopping iteration cancels and releases the reader.
+   */
+  watchExperience(
+    envelopeId = "primary",
+    options: { lastEventId?: string; signal?: AbortSignal } = {},
+  ): AsyncGenerator<FloydStreamEvent<ExperienceEnvelope>> {
+    return this.stream(`/api/experience/${encodeURIComponent(envelopeId)}/stream`, {
+      lastEventId: options.lastEventId,
+      signal: options.signal,
+    }) as AsyncGenerator<FloydStreamEvent<ExperienceEnvelope>>;
+  }
+
+  enrollExperienceDevice(
+    metadata: Record<string, unknown>,
+    deviceId?: string,
+    signal?: AbortSignal,
+  ): Promise<ExperienceDeviceEnrollment> {
+    return this.request("POST", "/api/devices/enroll", {
+      metadata,
+      ...(deviceId ? { device_id: deviceId } : {}),
+    }, signal);
+  }
+
+  authenticateExperienceDevice(
+    deviceId: string,
+    secret: string,
+    signal?: AbortSignal,
+  ): Promise<AuthenticatedExperienceDevice> {
+    return this.request("POST", "/api/devices/authenticate", { device_id: deviceId, secret }, signal);
+  }
+
+  revokeExperienceDevice(deviceId: string, signal?: AbortSignal): Promise<{ device_id: string; revoked: true }> {
+    return this.request("DELETE", `/api/devices/${encodeURIComponent(deviceId)}`, undefined, signal);
+  }
+
+  issueExperienceHandoff(
+    input: { envelope_id?: string; envelope_revision?: number; created_by_device_id?: string; ttl_ms?: number } = {},
+    signal?: AbortSignal,
+  ): Promise<ExperienceHandoffIssue> {
+    return this.request("POST", "/api/handoffs", input, signal);
+  }
+
+  consumeExperienceHandoff(
+    token: string,
+    deviceId: string,
+    deviceSecret: string,
+    signal?: AbortSignal,
+  ): Promise<ExperienceHandoffConsumption> {
+    return this.request("POST", "/api/handoffs/consume", {
+      token,
+      device_id: deviceId,
+      device_secret: deviceSecret,
+    }, signal);
+  }
+
+  revokeExperienceHandoff(handoffId: string, signal?: AbortSignal): Promise<{ handoff_id: string; revoked: true }> {
+    return this.request("DELETE", `/api/handoffs/${encodeURIComponent(handoffId)}`, undefined, signal);
   }
 
   /**
@@ -202,10 +333,10 @@ export class FloydClient {
     }
   }
 
-  attachSession(sessionId: string, actor: string, options: { lastEventId?: string; signal?: AbortSignal } = {}): AsyncGenerator<FloydStreamEvent> {
+  attachSession(sessionId: string, actor: string, options: { lastEventId?: string; signal?: AbortSignal; runId?: string } = {}): AsyncGenerator<FloydStreamEvent> {
     return this.stream(`/api/sessions/${encodeURIComponent(sessionId)}/attach`, {
       method: "POST",
-      body: { actor },
+      body: { actor, ...(options.runId ? { run_id: options.runId } : {}) },
       lastEventId: options.lastEventId,
       signal: options.signal,
     });

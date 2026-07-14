@@ -171,6 +171,128 @@ export interface RouteReceipt {
   issued_at: string;
 }
 
+// ---------- portable cross-surface experience ----------
+
+/** Independently versioned from package releases so old surfaces can negotiate. */
+export const FLOYD_EXPERIENCE_VERSION = "1.0.0" as const;
+export const FLOYD_SDK_PROTOCOL_VERSION = "1.0.0" as const;
+
+export interface ExperienceActiveContext {
+  project_id: FloydId | null;
+  session_id: FloydId | null;
+  run_id: FloydId | null;
+}
+
+/** Credential values are forbidden here; only a Core-owned reference may persist. */
+export interface ExperienceModelRoute {
+  provider: string | null;
+  model: string | null;
+  base_url: string | null;
+  provider_profile_id: string | null;
+  credential_ref: string | null;
+}
+
+export interface SurfaceExperienceState {
+  surface_id: string;
+  sdk_version: string;
+  envelope_version: string;
+  capabilities: string[];
+  transcript_cursor: number;
+  transcript_epoch: string | null;
+  last_event_id: string | null;
+  last_seen_at: string;
+}
+
+export interface ExperienceEnvelope {
+  id: string;
+  schema_version: typeof FLOYD_EXPERIENCE_VERSION;
+  revision: number;
+  active: ExperienceActiveContext;
+  model_route: ExperienceModelRoute;
+  transcript_cursor: number;
+  transcript_epoch: string | null;
+  last_event_id: string | null;
+  pending_questions: unknown[];
+  pending_permissions: unknown[];
+  composer_draft: string;
+  selected_artifact_id: string | null;
+  selected_view: string;
+  surfaces: Record<string, SurfaceExperienceState>;
+  updated_at: string;
+  updated_by_device_id: string | null;
+}
+
+export interface ExperienceEnvelopePatch {
+  expected_revision: number;
+  active?: Partial<ExperienceActiveContext>;
+  model_route?: Partial<ExperienceModelRoute>;
+  transcript_cursor?: number;
+  transcript_epoch?: string | null;
+  last_event_id?: string | null;
+  composer_draft?: string;
+  selected_artifact_id?: string | null;
+  selected_view?: string;
+  surface?: Omit<SurfaceExperienceState, "last_seen_at" | "envelope_version" | "transcript_epoch"> & {
+    envelope_version?: string;
+    transcript_epoch?: string | null;
+  };
+  device_id?: string | null;
+}
+
+export interface ExperienceNegotiationRequest {
+  surface_id: string;
+  sdk_version: string;
+  supported_envelope_versions: string[];
+  capabilities: string[];
+}
+
+export interface ExperienceNegotiationResult {
+  accepted: boolean;
+  envelope_version: string | null;
+  core_protocol_version: typeof FLOYD_SDK_PROTOCOL_VERSION;
+  minimum_sdk_version: string;
+  reason?: string;
+}
+
+export interface ExperienceDeviceEnrollment {
+  device_id: string;
+  /** Returned exactly once. Surfaces must move it to platform-secure storage. */
+  secret: string;
+  created_at: string;
+  key_id: string;
+}
+
+export interface AuthenticatedExperienceDevice {
+  device_id: string;
+  metadata: Record<string, unknown>;
+  authenticated_at: string;
+}
+
+export interface ExperienceHandoffIssue {
+  handoff_id: string;
+  token: string;
+  envelope_id: string;
+  envelope_revision: number;
+  expires_at: string;
+  deep_link: string;
+  deep_link_payload: {
+    version: 1;
+    handoff_id: string;
+    token: string;
+    envelope_id: string;
+    envelope_revision: number;
+  };
+}
+
+export interface ExperienceHandoffConsumption {
+  handoff_id: string;
+  envelope_id: string;
+  envelope_revision: number;
+  created_by_device_id: string | null;
+  consumed_at: string;
+  envelope: ExperienceEnvelope;
+}
+
 // ---------- permission gating ----------
 
 export interface PermissionPolicy {

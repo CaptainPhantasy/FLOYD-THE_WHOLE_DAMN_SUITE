@@ -8,26 +8,31 @@ built against this document alone; no additional gateway changes are required.
 - Base URL: `http://127.0.0.1:41414` (loopback; remote surfaces arrive via
   private overlay in a later phase — same contract).
 - Every request carries `Authorization: Bearer <gateway token>`
-  (`FLOYD_RUNTIME/core/gateway.token`, 0600). SSE endpoints also accept
-  `?token=` for `EventSource` clients that cannot set headers.
+  (`FLOYD_RUNTIME/core/gateway.token`, 0600). SSE clients must use the Floyd
+  SDK, which sends the same header; API query-token authentication is forbidden.
 - Session IDs are Floyd session IDs (`ses_…`) from `GET /api/state`. One Floyd
-  session is the cross-surface continuity container; runs/jobs/engine sessions
-  hang beneath it.
+  session is the project continuity container. Active conversation streams,
+  transcript cursors, steering, questions, and permissions are additionally
+  scoped by `run_id` so runs cannot cross-talk.
 
 ## POST `/api/sessions/{sessionId}/attach`
 
 Registers the calling surface as an active participant and begins streaming.
 
-Request body (JSON, optional): `{ "actor": "<surface identity string>" }`
+Request body (JSON, optional):
+`{ "actor": "<surface identity string>", "run_id": "run_…" }`.
+`run_id` is recommended for every active-run surface. Omitting it attaches to
+the aggregate session channel for backward compatibility.
 Response: `200` with `Content-Type: text/event-stream` — the response IS the
 event stream (see next section for frame format). Attaching also appends a
 `session.participant_attached` evidence event with the actor.
 
-`Last-Event-ID` behavior: WITHOUT the header, the stream starts LIVE (no
-history replay — surfaces must never act on stale interactive events). WITH a
+`Last-Event-ID` behavior: WITHOUT the header, Core first emits a durable
+`transcript` snapshot and then starts live. Events that arrive while the
+snapshot is being read are replayed after it. WITH a
 `Last-Event-ID: <seq>` header (or `?lastEventId=<seq>`), all buffered events
 with `seq > <seq>` are replayed, in order, before live events resume. Replay depth is bounded by the
-gateway buffer (5000 events per session, in-memory; a Core restart clears it —
+gateway buffer (5000 events per session/run scope, in-memory; a Core restart clears it —
 clients reconnecting after a gateway restart receive `last_seq: 0` in the hello
 frame and should treat history as truncated).
 
@@ -46,10 +51,22 @@ event: <type>
 data: <json payload>
 ```
 
-- `seq` — monotonically increasing integer, scoped to the session, engine
-  emission order. If the engine emitted A before B, no client observes B first.
+- `seq` — monotonically increasing integer scoped to the selected session/run
+  channel and engine emission order.
 - First frame is always `event: hello` with
-  `{"session_id", "last_seq", "replay_from"}` (no `id`).
+  `{"session_id", "run_id", "stream_epoch", "last_seq", "replay_from"}`
+  (no `id`).
+- A fresh attach then receives `event: transcript` with the active engine
+  session's durable messages and the replay boundary. This frame is display
+  state only; it is never an interactive permission action.
+- If the active builder is replaced while its messages are loading, Core
+  discards that snapshot and retries the replacement once. Fresh-attach replay
+  is filtered to the stable transcript engine so two builder generations are
+  never mixed into one restored conversation.
+- Currently open question/permission snapshots may follow as unsequenced state
+  frames without `id`. Core revalidates their engine target and interaction
+  generation after the provider calls; these snapshots are not inserted into
+  the replay buffer, so a resolved ask cannot be resurrected on reconnect.
 
 ### Event types and payload schema
 
@@ -82,11 +99,13 @@ Single inbound endpoint; `type` selects the primitive.
 
 | body.type | required fields | forwarded to |
 |---|---|---|
-| `steer` | `text` | engine prompt with `delivery: "steer"` on the session's newest engine session |
+| `steer` | `text` | engine prompt with `delivery: "steer"` on the selected run's newest builder session |
 | `answer` | `request_id`, and `answers: string[][]` (or `text` shorthand → `[[text]]`) | engine question reply |
 | `permission` | `request_id`, `reply: "once" \| "always" \| "reject"` | engine permission reply |
 
-Optional on all: `actor` (recorded in evidence).
+Optional on all: `actor` (recorded in evidence) and `run_id`. Active-run
+surfaces should always send `run_id`; a run outside the URL session returns
+`404`.
 Response: `202 {"session_id", "type", "delivered_to"}`.
 Errors: `400` missing fields / unknown type; `409` no engine session exists to
 receive input; `401`/`404` as above.

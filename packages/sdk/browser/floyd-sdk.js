@@ -1,3 +1,6 @@
+export const FLOYD_EXPERIENCE_VERSION = "1.0.0";
+export const FLOYD_SDK_PROTOCOL_VERSION = "1.0.0";
+
 export class FloydApiError extends Error {
   constructor(method, path, status, payload) {
     const detail = typeof payload === "string" ? payload : JSON.stringify(payload);
@@ -48,24 +51,90 @@ export class FloydBrowserClient {
   artifact(runId, role, signal) {
     return this.request("GET", `/api/runs/${encodeURIComponent(runId)}/artifact/${encodeURIComponent(role)}`, undefined, signal);
   }
+  artifactById(artifactId, signal) {
+    return this.request("GET", `/api/artifacts/${encodeURIComponent(artifactId)}`, undefined, signal);
+  }
   submit(projectId, goal, signal) {
     return this.request("POST", "/api/runs", { project_id: projectId, goal }, signal);
   }
   decide(runId, action, actor, signal) {
     return this.request("POST", `/api/runs/${encodeURIComponent(runId)}/decision`, { action, actor }, signal);
   }
-  steer(sessionId, text, actor, signal) {
-    return this.request("POST", `/api/sessions/${encodeURIComponent(sessionId)}/steer`, { type: "steer", text, actor }, signal);
+  steer(sessionId, text, actor, signal, runId) {
+    return this.request("POST", `/api/sessions/${encodeURIComponent(sessionId)}/steer`, { type: "steer", text, actor, ...(runId ? { run_id: runId } : {}) }, signal);
   }
-  answer(sessionId, requestId, answers, actor, signal) {
+  answer(sessionId, requestId, answers, actor, signal, runId) {
     return this.request("POST", `/api/sessions/${encodeURIComponent(sessionId)}/steer`, {
-      type: "answer", request_id: requestId, answers, actor,
+      type: "answer", request_id: requestId, answers, actor, ...(runId ? { run_id: runId } : {}),
     }, signal);
   }
-  permission(sessionId, requestId, reply, actor, signal) {
+  permission(sessionId, requestId, reply, actor, signal, runId) {
     return this.request("POST", `/api/sessions/${encodeURIComponent(sessionId)}/steer`, {
-      type: "permission", request_id: requestId, reply, actor,
+      type: "permission", request_id: requestId, reply, actor, ...(runId ? { run_id: runId } : {}),
     }, signal);
+  }
+
+  /** Negotiate this surface's SDK, envelope versions, and capabilities. */
+  negotiateExperience({
+    surface_id,
+    capabilities,
+    sdk_version = FLOYD_SDK_PROTOCOL_VERSION,
+    supported_envelope_versions = [FLOYD_EXPERIENCE_VERSION],
+  }, signal) {
+    return this.request("POST", "/api/experience/negotiate", {
+      surface_id,
+      sdk_version,
+      supported_envelope_versions,
+      capabilities,
+    }, signal);
+  }
+
+  experience(envelopeId = "primary", signal) {
+    return this.request("GET", `/api/experience/${encodeURIComponent(envelopeId)}`, undefined, signal);
+  }
+
+  /** Core preserves optimistic conflicts as HTTP 409; the SDK does not retry. */
+  updateExperience(envelopeId, patch, signal) {
+    return this.request("PATCH", `/api/experience/${encodeURIComponent(envelopeId)}`, patch, signal);
+  }
+
+  /** Resume with Last-Event-ID; stream() cancels the reader on break/abort. */
+  watchExperience(envelopeId = "primary", options = {}) {
+    return this.stream(`/api/experience/${encodeURIComponent(envelopeId)}/stream`, {
+      lastEventId: options.lastEventId,
+      signal: options.signal,
+    });
+  }
+
+  enrollExperienceDevice(metadata, deviceId, signal) {
+    return this.request("POST", "/api/devices/enroll", {
+      metadata,
+      ...(deviceId ? { device_id: deviceId } : {}),
+    }, signal);
+  }
+
+  authenticateExperienceDevice(deviceId, secret, signal) {
+    return this.request("POST", "/api/devices/authenticate", { device_id: deviceId, secret }, signal);
+  }
+
+  revokeExperienceDevice(deviceId, signal) {
+    return this.request("DELETE", `/api/devices/${encodeURIComponent(deviceId)}`, undefined, signal);
+  }
+
+  issueExperienceHandoff(input = {}, signal) {
+    return this.request("POST", "/api/handoffs", input, signal);
+  }
+
+  consumeExperienceHandoff(token, deviceId, deviceSecret, signal) {
+    return this.request("POST", "/api/handoffs/consume", {
+      token,
+      device_id: deviceId,
+      device_secret: deviceSecret,
+    }, signal);
+  }
+
+  revokeExperienceHandoff(handoffId, signal) {
+    return this.request("DELETE", `/api/handoffs/${encodeURIComponent(handoffId)}`, undefined, signal);
   }
 
   /** Stream one user-configured provider through Core's normalized relay. */
@@ -168,7 +237,7 @@ export class FloydBrowserClient {
   attachSession(sessionId, actor, options = {}) {
     return this.stream(`/api/sessions/${encodeURIComponent(sessionId)}/attach`, {
       method: "POST",
-      body: { actor },
+      body: { actor, ...(options.runId ? { run_id: options.runId } : {}) },
       lastEventId: options.lastEventId,
       signal: options.signal,
     });

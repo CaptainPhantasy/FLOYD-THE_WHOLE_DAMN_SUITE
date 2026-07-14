@@ -180,14 +180,17 @@
 import { FloydBrowserClient, FloydApiError } from "/floyd-sdk.js";
 
 const query = new URLSearchParams(location.search);
-const queryToken = query.get("token");
-if (queryToken) {
-  sessionStorage.setItem("floyd_gateway_token", queryToken);
-  history.replaceState({}, "", location.pathname);
+const bootstrap = new URLSearchParams(location.hash.replace(/^#/, ""));
+const bootstrapToken = bootstrap.get("token");
+if (bootstrapToken) {
+  sessionStorage.setItem("floyd_gateway_token", bootstrapToken);
+  history.replaceState({}, "", `${location.pathname}${location.search}`);
 }
 const token = () => sessionStorage.getItem("floyd_gateway_token") || "";
 const client = new FloydBrowserClient({ token });
 const actor = "douglas-cockpit";
+const surfaceId = "cockpit";
+const envelopeId = "primary";
 
 const app = {
   state: { projects: [], sessions: [], runs: [], jobs: [], leases: [], provider_profiles: [] },
@@ -198,11 +201,18 @@ const app = {
   streamAbort: null,
   transcripts: new Map(),
   refreshTimer: null,
-  modelRoute: (() => {
-    try { return JSON.parse(sessionStorage.getItem("floyd_model_route") || '{"provider":"opencode-go","model":"","baseUrl":""}'); }
-    catch { return { provider: "opencode-go", model: "", baseUrl: "" }; }
-  })(),
+  modelRoute: { provider: "opencode-go", model: "", baseUrl: "" },
   modelKey: "",
+  envelope: null,
+  envelopeAbort: null,
+  draftTimer: null,
+  cursorTimer: null,
+  cursorPending: null,
+  restoringEnvelope: false,
+  restoredArtifactId: null,
+  snapshotParts: new Map(),
+  runSelectionGeneration: 0,
+  activeContextPublish: Promise.resolve(),
 };
 
 const el = (id) => document.getElementById(id);
@@ -215,6 +225,176 @@ function notify(error) {
   toast.classList.add("show");
   clearTimeout(notify.timer);
   notify.timer = setTimeout(() => toast.classList.remove("show"), 7000);
+}
+
+function valueEqual(left, right) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function envelopeChangeApplied(envelope, change) {
+  return Object.entries(change).every(([key, value]) => {
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      return Object.entries(value).every(([childKey, childValue]) => valueEqual(envelope[key]?.[childKey], childValue));
+    }
+    return valueEqual(envelope[key], value);
+  });
+}
+
+function envelopeChangeConflicts(base, latest, change) {
+  return Object.entries(change).some(([key, value]) => {
+    if (key === "transcript_cursor" && Number(latest.transcript_cursor) >= Number(value)) return false;
+    if (key === "last_event_id" && change.transcript_cursor !== undefined
+      && Number(latest.transcript_cursor) >= Number(change.transcript_cursor)) return false;
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      return Object.entries(value).some(([childKey, childValue]) => {
+        const before = base[key]?.[childKey];
+        const current = latest[key]?.[childKey];
+        return !valueEqual(before, current) && !valueEqual(current, childValue);
+      });
+    }
+    return !valueEqual(base[key], latest[key]) && !valueEqual(latest[key], value);
+  });
+}
+
+async function patchEnvelope(change, retry = true) {
+  if (!app.envelope) return null;
+  const base = app.envelope;
+  try {
+    app.envelope = await client.updateExperience(envelopeId, {
+      expected_revision: base.revision,
+      ...change,
+      surface: {
+        surface_id: surfaceId,
+        sdk_version: "1.0.0",
+        capabilities: ["coding-runs", "model-chat", "questions", "permissions", "artifacts", "drafts", "experience-stream"],
+        transcript_cursor: change.transcript_cursor ?? app.envelope.transcript_cursor ?? 0,
+        transcript_epoch: change.transcript_epoch ?? app.envelope.transcript_epoch ?? null,
+        last_event_id: change.last_event_id ?? app.envelope.last_event_id ?? null,
+      },
+    });
+    return app.envelope;
+  } catch (error) {
+    if (retry && error instanceof FloydApiError && error.status === 409) {
+      const latest = error.payload?.envelope || await client.experience(envelopeId);
+      app.envelope = latest;
+      const cursorOnly = Object.keys(change).every((key) => key === "transcript_cursor" || key === "last_event_id");
+      if (cursorOnly && change.transcript_cursor !== undefined
+        && Number(latest.transcript_cursor) >= Number(change.transcript_cursor)) return latest;
+      const epochResetOnly = Object.keys(change).every((key) => ["transcript_epoch", "transcript_cursor", "last_event_id"].includes(key));
+      if (epochResetOnly && change.transcript_epoch === latest.transcript_epoch
+        && Number(latest.transcript_cursor) >= Number(change.transcript_cursor ?? 0)) return latest;
+      if (envelopeChangeApplied(latest, change)) return latest;
+      if (envelopeChangeConflicts(base, latest, change)) {
+        throw new Error("Experience changed on another surface. Latest Core state was kept; review and apply your change again.");
+      }
+      return patchEnvelope(change, false);
+    }
+    throw error;
+  }
+}
+
+function queueActiveContextPublish(generation, change) {
+  const publish = async () => {
+    if (generation !== app.runSelectionGeneration) return false;
+    await patchEnvelope(change);
+    return generation === app.runSelectionGeneration;
+  };
+  const queued = app.activeContextPublish.then(publish, publish);
+  app.activeContextPublish = queued.catch(() => {});
+  return queued;
+}
+
+function scheduleDraftSave(value) {
+  clearTimeout(app.draftTimer);
+  app.draftTimer = setTimeout(() => {
+    patchEnvelope({ composer_draft: value }).catch(notify);
+  }, 350);
+}
+
+function clearPendingCursorSave() {
+  if (app.cursorTimer) clearTimeout(app.cursorTimer);
+  app.cursorTimer = null;
+  app.cursorPending = null;
+}
+
+function scheduleCursorSave(eventId) {
+  const cursor = Number(eventId);
+  if (!Number.isFinite(cursor)) return;
+  app.cursorPending = {
+    cursor,
+    eventId: String(eventId),
+    runId: app.currentRunId,
+    epoch: app.envelope?.transcript_epoch ?? null,
+  };
+  if (app.cursorTimer) return;
+  app.cursorTimer = setTimeout(() => {
+    const pending = app.cursorPending;
+    app.cursorPending = null;
+    app.cursorTimer = null;
+    if (pending && pending.runId === app.currentRunId
+      && pending.epoch === (app.envelope?.transcript_epoch ?? null)) {
+      patchEnvelope({ transcript_cursor: pending.cursor, last_event_id: pending.eventId }).catch(notify);
+    }
+  }, 500);
+}
+
+async function restoreEnvelope(envelope) {
+  app.envelope = envelope;
+  app.restoringEnvelope = true;
+  try {
+    app.modelRoute = {
+      provider: envelope.model_route?.provider || "opencode-go",
+      model: envelope.model_route?.model || "",
+      baseUrl: envelope.model_route?.base_url || "",
+    };
+    if (document.activeElement !== el("prompt")) el("prompt").value = envelope.composer_draft || "";
+    const runId = envelope.active?.run_id;
+    if (runId && runId !== app.currentRunId && app.state.runs.some((run) => run.id === runId)) {
+      await selectRun(runId, { publish: false });
+    } else if (!runId && app.currentRunId && envelope.selected_view === "new-task") {
+      startNewTask({ publish: false });
+    }
+    if (envelope.selected_view === "model-settings") renderModelSettings({ publish: false });
+    if (envelope.selected_view === "artifact" && envelope.selected_artifact_id
+      && envelope.selected_artifact_id !== app.restoredArtifactId && app.currentRunId) {
+      const content = await client.artifactById(envelope.selected_artifact_id);
+      addEntry(app.currentRunId, {
+        kind: "event",
+        title: `Artifact: ${shortId(envelope.selected_artifact_id)}`,
+        text: typeof content === "string" ? content : JSON.stringify(content, null, 2),
+      });
+      app.restoredArtifactId = envelope.selected_artifact_id;
+    }
+  } finally {
+    app.restoringEnvelope = false;
+  }
+}
+
+async function initializeExperience() {
+  await client.negotiateExperience({
+    surface_id: surfaceId,
+    sdk_version: "1.0.0",
+    supported_envelope_versions: ["1.0.0"],
+    capabilities: ["coding-runs", "model-chat", "questions", "permissions", "artifacts", "drafts", "experience-stream"],
+  });
+  await restoreEnvelope(await client.experience(envelopeId));
+  app.envelopeAbort?.abort();
+  const controller = new AbortController();
+  app.envelopeAbort = controller;
+  void (async () => {
+    try {
+      for await (const event of client.watchExperience(envelopeId, {
+        lastEventId: String(app.envelope?.revision || 0),
+        signal: controller.signal,
+      })) {
+        if (event.type === "experience" && event.data?.revision > (app.envelope?.revision || 0)) {
+          await restoreEnvelope(event.data);
+        }
+      }
+    } catch (error) {
+      if (!controller.signal.aborted) notify(error);
+    }
+  })();
 }
 
 function transcript(runId) {
@@ -232,6 +412,61 @@ function addEntry(runId, entry) {
     items.push(entry);
   }
   if (app.currentRunId === runId) renderMessages();
+}
+
+function transcriptText(value) {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value.map(transcriptText).filter(Boolean).join("\n");
+  if (!value || typeof value !== "object") return "";
+  if (typeof value.text === "string") return value.text;
+  if (value.content !== undefined) return transcriptText(value.content);
+  if (value.parts !== undefined) return transcriptText(value.parts);
+  return "";
+}
+
+function restoreTranscriptSnapshot(runId, messages) {
+  if (!Array.isArray(messages)) return;
+  const parts = new Map();
+  const visit = (value) => {
+    if (Array.isArray(value)) { value.forEach(visit); return; }
+    if (!value || typeof value !== "object") return;
+    const partId = value.id ?? value.part_id ?? value.partID;
+    if (partId && typeof value.text === "string") parts.set(String(partId), value.text);
+    Object.values(value).forEach(visit);
+  };
+  visit(messages);
+  app.snapshotParts.set(runId, parts);
+  const entries = [...messages]
+    .sort((left, right) => Number(left?.time?.created ?? left?.info?.time?.created ?? 0) - Number(right?.time?.created ?? right?.info?.time?.created ?? 0))
+    .map((message) => {
+      const role = message?.role ?? message?.type ?? message?.info?.role ?? message?.info?.type;
+      const text = transcriptText(message?.content ?? message?.parts ?? message?.data);
+      if (!text || !["user", "assistant", "system"].includes(role)) return null;
+      return { kind: role, text, messageId: message?.id ?? message?.info?.id ?? null };
+    })
+    .filter(Boolean);
+  if (entries.length) {
+    app.transcripts.set(runId, entries);
+    if (runId === app.currentRunId) renderMessages();
+  }
+}
+
+function deduplicatedLiveText(runId, data) {
+  const delta = String(data?.delta ?? data?.text ?? "");
+  const part = data?.part ?? data;
+  const partId = part?.id ?? part?.part_id ?? part?.partID;
+  const fullText = typeof part?.text === "string" ? part.text : null;
+  const snapshot = app.snapshotParts.get(runId);
+  if (!partId || !snapshot?.has(String(partId)) || fullText === null) return delta;
+  const prior = snapshot.get(String(partId));
+  if (fullText === prior) return "";
+  if (prior.startsWith(fullText)) return "";
+  if (fullText.startsWith(prior)) {
+    snapshot.set(String(partId), fullText);
+    return fullText.slice(prior.length);
+  }
+  snapshot.delete(String(partId));
+  return delta;
 }
 
 async function refreshHealth() {
@@ -320,11 +555,12 @@ function renderMessages() {
   container.scrollTop = container.scrollHeight;
 }
 
-async function renderInspector() {
+async function renderInspector(expectedRunId = app.currentRunId, expectedGeneration = app.runSelectionGeneration) {
   const run = app.currentRun;
-  if (!run) return;
+  if (!run || run.id !== expectedRunId) return false;
   try {
     const [detail, evidence] = await Promise.all([client.run(run.id), client.evidence(run.id)]);
+    if (expectedGeneration !== app.runSelectionGeneration || expectedRunId !== app.currentRunId) return false;
     app.currentRun = detail;
     const jobs = detail.jobs || [];
     const artifacts = detail.artifacts || [];
@@ -340,10 +576,14 @@ async function renderInspector() {
         <div class="inspect-row"><span>Engine ID</span><code title="${escapeHtml(job.engine_session_id || "pending")}">${escapeHtml(shortId(job.engine_session_id || "pending"))}</code></div>`).join("") || '<div class="inspect-row"><span>State</span><code>not scheduled</code></div>'}</div>
       <div class="inspect-section"><div class="inspect-label">Artifacts</div>${artifacts.map((artifact) => `<div class="artifact" data-artifact-role="${escapeHtml(artifact.role)}"><strong>${escapeHtml(artifact.role)}</strong><span>${escapeHtml(shortId(artifact.id))} / ${artifact.bytes} bytes</span></div>`).join("") || '<div style="color:var(--faint)">No artifacts yet.</div>'}</div>
       <div class="inspect-section"><div class="inspect-label">Runtime boundary</div><div class="inspect-row"><span>Surface</span><code>@floyd/sdk</code></div><div class="inspect-row"><span>Authority</span><code>Floyd Core</code></div><div class="inspect-row"><span>Engine</span><code>OpenCode SDK</code></div></div>`;
-  } catch (error) { notify(error); }
+    return true;
+  } catch (error) {
+    if (expectedGeneration === app.runSelectionGeneration && expectedRunId === app.currentRunId) notify(error);
+    return false;
+  }
 }
 
-function renderModelSettings() {
+function renderModelSettings({ publish = true } = {}) {
   const route = app.modelRoute;
   el("inspectStatus").textContent = "Model routing";
   el("inspectorBody").innerHTML = `
@@ -362,6 +602,7 @@ function renderModelSettings() {
       <div class="inspect-row"><span>Relay</span><code>Core /gateway</code></div>
       <div class="inspect-row"><span>Stream</span><code>delta / done</code></div>
     </div>`;
+  if (publish && !app.restoringEnvelope) patchEnvelope({ selected_view: "model-settings" }).catch(notify);
 }
 
 function startModelChat() {
@@ -372,8 +613,9 @@ function startModelChat() {
   if (!model || !apiKey) throw new Error("Model and API key are required.");
   app.modelRoute = { provider, model, baseUrl };
   app.modelKey = apiKey;
-  sessionStorage.setItem("floyd_model_route", JSON.stringify(app.modelRoute));
   app.streamAbort?.abort();
+  clearPendingCursorSave();
+  const selectionGeneration = ++app.runSelectionGeneration;
   app.currentRunId = `model-${Date.now()}`;
   app.currentSessionId = null;
   app.currentRun = { id: app.currentRunId, session_id: "ephemeral", goal: `${provider} / ${model}`, status: "model_chat" };
@@ -382,15 +624,28 @@ function startModelChat() {
   el("modeButton").textContent = "Mode: model chat";
   renderHeader(); renderMessages();
   el("routeLabel").textContent = `Route: Core / ${provider} / ${model}`;
+  queueActiveContextPublish(selectionGeneration, {
+    active: { project_id: null, session_id: null, run_id: null },
+    transcript_cursor: 0,
+    last_event_id: null,
+    model_route: { provider, model, base_url: baseUrl || null, provider_profile_id: null, credential_ref: null },
+    selected_view: "model-chat",
+    composer_draft: "",
+  }).catch(notify);
   el("prompt").focus();
 }
 
-async function selectRun(runId) {
+async function selectRun(runId, { publish = true } = {}) {
+  const selectionGeneration = ++app.runSelectionGeneration;
   app.streamAbort?.abort();
   app.streamAbort = null;
+  clearPendingCursorSave();
   app.modelKey = "";
+  app.restoredArtifactId = null;
+  const selectedRun = await client.run(runId);
+  if (selectionGeneration !== app.runSelectionGeneration) return;
   app.currentRunId = runId;
-  app.currentRun = await client.run(runId);
+  app.currentRun = selectedRun;
   app.currentSessionId = app.currentRun.session_id;
   app.mode = "steer";
   if (!app.transcripts.has(runId)) {
@@ -400,7 +655,19 @@ async function selectRun(runId) {
     ]);
   }
   el("modeButton").textContent = "Mode: guide active run";
-  renderRuns(); renderHeader(); renderMessages(); await renderInspector();
+  renderRuns(); renderHeader(); renderMessages();
+  const inspectorCurrent = await renderInspector(runId, selectionGeneration);
+  if (!inspectorCurrent || selectionGeneration !== app.runSelectionGeneration || runId !== app.currentRunId) return;
+  if (publish && !app.restoringEnvelope) {
+    const published = await queueActiveContextPublish(selectionGeneration, {
+      active: { project_id: app.currentRun.project_id, session_id: app.currentRun.session_id, run_id: runId },
+      transcript_cursor: 0,
+      last_event_id: null,
+      selected_view: "run",
+      composer_draft: el("prompt").value,
+    });
+    if (!published || selectionGeneration !== app.runSelectionGeneration || runId !== app.currentRunId) return;
+  }
   attachSession(runId, app.currentSessionId);
 }
 
@@ -409,12 +676,25 @@ function attachSession(runId, sessionId) {
   app.streamAbort = controller;
   void (async () => {
     try {
-      for await (const event of client.attachSession(sessionId, actor, { signal: controller.signal })) {
-        if (event.type === "hello") continue;
+      for await (const event of client.attachSession(sessionId, actor, { signal: controller.signal, runId })) {
+        if (event.type === "hello") {
+          const epoch = event.data?.stream_epoch;
+          if (epoch && epoch !== app.envelope?.transcript_epoch) {
+            await patchEnvelope({ transcript_epoch: epoch, transcript_cursor: 0, last_event_id: null });
+          }
+          continue;
+        }
+        if (event.type === "transcript") {
+          restoreTranscriptSnapshot(runId, event.data?.messages);
+          if (event.id) scheduleCursorSave(event.id);
+          continue;
+        }
+        if (event.id) scheduleCursorSave(event.id);
         const payload = event.data || {};
         const data = payload.data || {};
         if (event.type === "token" && payload.channel === "text") {
-          addEntry(runId, { kind: "assistant-token", text: String(data.delta ?? data.text ?? "") });
+          const text = deduplicatedLiveText(runId, data);
+          if (text) addEntry(runId, { kind: "assistant-token", text });
         } else if (event.type === "tool_call_start") {
           addEntry(runId, { kind: "tool", title: "Tool started", text: String(data.tool ?? data.name ?? "tool"), id: event.id });
         } else if (event.type === "tool_call_finish") {
@@ -459,7 +739,7 @@ async function sendPrompt() {
         if (event.type === "delta") addEntry(app.currentRunId, { kind: "assistant-token", text: event.data.text || "" });
       }
     } else if (app.mode === "steer" && app.currentSessionId) {
-      await client.steer(app.currentSessionId, text, actor);
+      await client.steer(app.currentSessionId, text, actor, undefined, app.currentRunId);
       addEntry(app.currentRunId, { kind: "user", text });
     } else {
       const projectId = el("projectSelect").value;
@@ -475,15 +755,28 @@ async function sendPrompt() {
   finally { el("send").disabled = false; prompt.focus(); }
 }
 
-function startNewTask() {
+function startNewTask({ publish = true } = {}) {
   app.streamAbort?.abort();
+  clearPendingCursorSave();
+  const selectionGeneration = ++app.runSelectionGeneration;
   app.modelKey = "";
+  app.restoredArtifactId = null;
   app.currentRunId = null;
   app.currentRun = null;
   app.currentSessionId = null;
   app.mode = "new";
   el("modeButton").textContent = "Mode: new run";
   renderRuns(); renderHeader(); renderMessages();
+  if (publish && !app.restoringEnvelope) {
+    queueActiveContextPublish(selectionGeneration, {
+      active: { project_id: el("projectSelect").value || null, session_id: null, run_id: null },
+      transcript_cursor: 0,
+      last_event_id: null,
+      selected_artifact_id: null,
+      selected_view: "new-task",
+      composer_draft: el("prompt").value,
+    }).catch(notify);
+  }
   el("prompt").focus();
 }
 
@@ -508,10 +801,10 @@ el("messages").addEventListener("click", async (event) => {
       const entry = transcript(app.currentRunId)[Number(answerButton.dataset.questionIndex)];
       let answer = answerButton.dataset.answer;
       if (answer === "__custom__") answer = window.prompt("Answer the agent question:")?.trim();
-      if (answer) await client.answer(app.currentSessionId, entry.data.id, [[answer]], actor);
+      if (answer) await client.answer(app.currentSessionId, entry.data.id, [[answer]], actor, undefined, app.currentRunId);
     } else if (permissionButton) {
       const entry = transcript(app.currentRunId)[Number(permissionButton.dataset.permissionIndex)];
-      await client.permission(app.currentSessionId, entry.data.id, permissionButton.dataset.reply, actor);
+      await client.permission(app.currentSessionId, entry.data.id, permissionButton.dataset.reply, actor, undefined, app.currentRunId);
     }
   } catch (error) { notify(error); }
 });
@@ -525,6 +818,12 @@ el("inspectorBody").addEventListener("click", async (event) => {
   try {
     const content = await client.artifact(app.currentRunId, card.dataset.artifactRole);
     addEntry(app.currentRunId, { kind: "event", title: `Artifact: ${card.dataset.artifactRole}`, text: typeof content === "string" ? content : JSON.stringify(content, null, 2) });
+    const detail = await client.run(app.currentRunId);
+    const artifact = (detail.artifacts || []).find((item) => item.role === card.dataset.artifactRole);
+    if (artifact) {
+      app.restoredArtifactId = artifact.id;
+      await patchEnvelope({ selected_artifact_id: artifact.id, selected_view: "artifact" });
+    }
   } catch (error) { notify(error); }
 });
 el("newTask").addEventListener("click", startNewTask);
@@ -539,6 +838,7 @@ el("send").addEventListener("click", sendPrompt);
 el("prompt").addEventListener("keydown", (event) => {
   if ((event.metaKey || event.ctrlKey) && event.key === "Enter") { event.preventDefault(); sendPrompt(); }
 });
+el("prompt").addEventListener("input", (event) => scheduleDraftSave(event.target.value));
 el("acceptRun").addEventListener("click", () => decide("accept"));
 el("rejectRun").addEventListener("click", () => decide("reject"));
 el("escalateRun").addEventListener("click", () => decide("escalate"));
@@ -548,6 +848,7 @@ setInterval(refreshHealth, 5000);
 app.refreshTimer = setInterval(() => refreshState(), 3500);
 await refreshHealth();
 await refreshState();
+try { await initializeExperience(); } catch (error) { if (token()) notify(error); }
 if (query.get("settings") === "model") renderModelSettings();
 </script>
 </body>
