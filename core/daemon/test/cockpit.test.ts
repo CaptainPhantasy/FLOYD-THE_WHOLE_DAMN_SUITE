@@ -24,6 +24,56 @@ test("cockpit has inline question and permission controls with no emoji glyphs",
   assert.doesNotMatch(html, /[⚙🔐😀-🙏🌀-🫿]/u);
 });
 
+test("cockpit Surface Hub exposes exactly the five admitted Floyd surfaces", () => {
+  assert.match(html, /id="surfaceHub"/);
+  assert.match(html, /id="surfaceDialog"/);
+  const start = html.indexOf("const FLOYD_SURFACES");
+  const end = html.indexOf("const app =", start);
+  assert.ok(start >= 0 && end > start);
+  const surfaces = new Function(`${html.slice(start, end)}; return FLOYD_SURFACES;`)() as Array<Record<string, string>>;
+  assert.deepEqual(surfaces.map(({ id }) => id), ["desktop", "ide", "tui", "pty", "launcher"]);
+  assert.deepEqual(surfaces.filter(({ kind }) => kind === "url").map(({ target }) => target), [
+    "http://127.0.0.1:3001/",
+    "http://127.0.0.1:10001/",
+    "http://127.0.0.1:11001/",
+    "http://127.0.0.1:11000/",
+  ]);
+});
+
+test("Surface Hub launch targets are credential-free and TUI continuation is shell-safe", () => {
+  const start = html.indexOf("function shellQuote");
+  const end = html.indexOf("function activeSurfaceProject", start);
+  assert.ok(start >= 0 && end > start);
+  const helpers = new Function(`${html.slice(start, end)}; return { shellQuote, safeSurfaceUrl, continuationCommand };`)() as {
+    shellQuote: (value: string) => string;
+    safeSurfaceUrl: (surface: Record<string, string>) => string;
+    continuationCommand: (project: { id: string; root_path: string } | null) => string | null;
+  };
+  assert.equal(helpers.safeSurfaceUrl({ id: "ide", kind: "url", target: "http://127.0.0.1:10001/" }), "http://127.0.0.1:10001/");
+  for (const target of [
+    "https://127.0.0.1:10001/",
+    "http://example.com/",
+    "http://user:secret@127.0.0.1:10001/",
+    "http://127.0.0.1:10001/?token=secret",
+    "http://127.0.0.1:10001/#run=run-1",
+  ]) assert.throws(() => helpers.safeSurfaceUrl({ id: "bad", kind: "url", target }), /Unsafe launch target/);
+  const command = helpers.continuationCommand({ id: "project-'one", root_path: "/tmp/Floyd's work" });
+  assert.equal(command, "cd -- '/tmp/Floyd'\"'\"'s work' && '/Volumes/Storage/FLOYD_RUNTIME/bin/floyd-tui' floyd --project-id 'project-'\"'\"'one' --continue");
+  assert.equal(helpers.continuationCommand(null), null);
+  assert.doesNotMatch(command!, /(token|api[_-]?key|session[_-]?id|run[_-]?id|last[_-]?event)/i);
+});
+
+test("Surface Hub reports Core-restored continuity and the honest remote loopback boundary", () => {
+  assert.match(html, /Core continuation envelope/);
+  assert.match(html, /app\.envelope\?\.active/);
+  assert.match(html, /app\.envelope\?\.last_event_id/);
+  assert.match(html, /Floyd Core remains the authority and restores context/);
+  assert.match(html, /loopback addresses open on this device, not on the workstation/);
+  assert.match(html, /does not federate third-party applications/);
+  assert.match(html, /window\.open\(target, "_blank", "noopener,noreferrer"\)/);
+  assert.doesNotMatch(html, /[?&#](token|secret|api_key|session_id|run_id|last_event_id)=/i);
+});
+
 test("remote cockpit is continuation-only and disables local authority controls", () => {
   assert.match(html, /const remoteMode =/);
   assert.match(html, /Remote continuation cannot create a new run/);
