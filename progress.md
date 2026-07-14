@@ -311,4 +311,10 @@ A 2026-07-12 audit found a self-resurrecting `com.floyd.core` launchd daemon, a 
 - TerminalOne gained a Floyd action, Core/OpenCode status, loopback binding by default, `node:crypto.randomUUID()` in place of `uuid`, structured occupied-port failure, and removal of rendered gear/star/close glyphs. Its full input, Core, browser, resume, feature, behavior, and responsive suites passed.
 - Both production and complete dependency audits report zero vulnerabilities. Express is 4.22.2 and WebSocket is 8.21.0.
 - Live proof used Floyd Core PID 55182 and managed OpenCode PID 55188. Rendered browser checks on isolated ports showed `Core/OpenCode online`, real `floyd-core` health JSON in each PTY, no provider/API-key text, no rendered emoji, and no page errors. The first launcher render exposed a missing favicon 404; a data favicon removed it before the final proof.
-- TerminalOne commit `b657853ce0f373637261145ecf4666b920bcdc8e` pushed to `CaptainPhantasy/TerminalOne` branch `feat/floyd-core-runtime`. Launcher commit `55d81f95f2b4bcaa28272678b4b6ee8659578d3e` remains only in the independent copy because its `origin` is the protected local donor.
+- TerminalOne implementation commit `b657853ce0f373637261145ecf4666b920bcdc8e` plus documentation head `d6c652f2a9bc4f1d58ee4402c93884f0bb3822b5` pushed to `CaptainPhantasy/TerminalOne` branch `feat/floyd-core-runtime`. Launcher implementation commit `55d81f95f2b4bcaa28272678b4b6ee8659578d3e` plus documentation head `5caf75615d346e164b610f763bba0ec290b8c30b` remain only in the independent copy because its `origin` is the protected local donor.
+
+## Active surface scope change — 2026-07-14
+
+- Douglas removed ADKv2Agent and The_Burner from the active integration list before work began on either component.
+- Neither protected donor nor either intake copy was modified. Existing intake directories remain untouched as historical provenance; they are excluded from the active manifest and copy-preparation loop rather than deleted.
+- The active five-surface system is Desktop, IDE, OhMyFloyd, TerminalOne, and harness-launcher. OhMyFloyd is the only component integration still pending.

@@ -12,12 +12,12 @@ interface Surface {
   copy_verified: boolean;
 }
 
-test("ecosystem manifest names every requested surface behind Floyd Core", () => {
+test("ecosystem manifest names every active surface behind Floyd Core", () => {
   const manifest = JSON.parse(readFileSync(join(import.meta.dirname, "../../../ecosystem/surfaces.json"), "utf8")) as {
     authority: { core: string; coding_engine: string; surface_contract: string };
     surfaces: Surface[];
   };
-  const expected = ["desktop", "ide", "tui", "pty", "launcher", "adk", "mobile"];
+  const expected = ["desktop", "ide", "tui", "pty", "launcher"];
   assert.deepEqual(manifest.surfaces.map((surface) => surface.id).sort(), expected.sort());
   assert.equal(manifest.authority.core, "Floyd Core");
   assert.match(manifest.authority.coding_engine, /OpenCode 1\.17\.18/);

@@ -25,8 +25,6 @@ clone_remote desktop https://github.com/CaptainPhantasy/floyd-desktop-web-v2.git
 clone_remote ide https://github.com/CaptainPhantasy/mobile-web-IDE.git
 clone_remote tui https://github.com/CaptainPhantasy/OhMyFloyd.git
 clone_remote pty https://github.com/CaptainPhantasy/TerminalOne.git
-clone_remote adk https://github.com/CaptainPhantasy/ADKv2Agent.git
-clone_remote mobile https://github.com/CaptainPhantasy/The_Burner.git
 
 LAUNCHER_SOURCE=/Volumes/Storage/harness-launcher
 LAUNCHER_TARGET="$DEST/launcher"
@@ -39,8 +37,8 @@ else
 fi
 
 printf '%-10s %-12s %-12s %s\n' surface branch head clean
-for target in "$DEST"/*; do
-  id=$(basename "$target")
+for id in desktop ide tui pty launcher; do
+  target="$DEST/$id"
   branch=$(git -C "$target" branch --show-current)
   head=$(git -C "$target" rev-parse --short=12 HEAD)
   if [ -n "$(git -C "$target" status --porcelain)" ]; then clean=no; else clean=yes; fi
