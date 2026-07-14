@@ -3,173 +3,472 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Floyd Cockpit</title>
+<meta name="color-scheme" content="dark">
+<title>Floyd Workstation</title>
 <style>
-  :root { color-scheme: dark; --bg:#0d1117; --panel:#161b22; --line:#30363d; --fg:#e6edf3; --dim:#8b949e; --acc:#e3b341; --ok:#3fb950; --err:#f85149; }
+  :root {
+    color-scheme: dark;
+    --bg: #080a0d;
+    --surface: #0d1015;
+    --surface-2: #12161d;
+    --surface-3: #171c24;
+    --line: #252b35;
+    --line-strong: #353d49;
+    --text: #e8ecf2;
+    --muted: #8993a3;
+    --faint: #596273;
+    --accent: #d7a84a;
+    --accent-soft: rgba(215, 168, 74, .12);
+    --success: #62bd83;
+    --danger: #e26c6c;
+    --info: #78a6d8;
+    --radius: 8px;
+    --mono: "Phantasy Mono PTY", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    --sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
   * { box-sizing: border-box; }
-  body { margin:0; font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background:var(--bg); color:var(--fg); }
-  header { padding:10px 16px; border-bottom:1px solid var(--line); display:flex; gap:16px; align-items:baseline; }
-  header h1 { font-size:15px; margin:0; color:var(--acc); letter-spacing:2px; }
-  #health { color: var(--dim); }
-  main { display:grid; grid-template-columns: 320px 1fr; gap:0; min-height: calc(100vh - 42px); }
-  nav { border-right:1px solid var(--line); padding:12px; overflow-y:auto; }
-  section { padding:12px 16px; overflow-x:auto; }
-  h2 { font-size:12px; text-transform:uppercase; color:var(--dim); margin:14px 0 6px; }
-  .card { background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:8px 10px; margin-bottom:8px; cursor:pointer; }
-  .card:hover { border-color: var(--acc); }
-  .card .id { color:var(--dim); font-size:11px; }
-  .status { font-weight:bold; }
-  .status.waiting_review { color: var(--acc); }
-  .status.accepted, .status.succeeded { color: var(--ok); }
-  .status.failed, .status.rejected { color: var(--err); }
-  pre { background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:10px; overflow-x:auto; white-space:pre-wrap; max-height:400px; overflow-y:auto; }
-  button { background:var(--panel); color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:6px 14px; font:inherit; cursor:pointer; margin-right:8px; }
-  button.accept { border-color: var(--ok); color: var(--ok); }
-  button.reject { border-color: var(--err); color: var(--err); }
-  button:disabled { opacity:.4; cursor:default; }
-  .evrow { border-bottom:1px solid var(--line); padding:3px 0; }
-  .evrow .t { color:var(--acc); }
-  .unavail { color:var(--dim); font-style:italic; }
+  html, body { width: 100%; height: 100%; }
+  body { margin: 0; overflow: hidden; background: var(--bg); color: var(--text); font: 13px/1.45 var(--sans); }
+  button, textarea, select, input { font: inherit; }
+  button { color: inherit; }
+  .topbar {
+    height: 44px; display: grid; grid-template-columns: 260px 1fr auto; align-items: center;
+    border-bottom: 1px solid var(--line); background: #0a0d11; user-select: none;
+  }
+  .brand { height: 100%; display: flex; align-items: center; gap: 11px; padding: 0 14px; border-right: 1px solid var(--line); }
+  .brand-mark { width: 18px; height: 18px; position: relative; border: 1px solid var(--accent); transform: rotate(45deg); }
+  .brand-mark::after { content: ""; position: absolute; inset: 4px; border: 1px solid var(--accent); }
+  .brand-name { font: 700 12px/1 var(--mono); letter-spacing: .18em; }
+  .command-title { justify-self: center; color: var(--muted); font: 12px var(--mono); }
+  .health { display: flex; align-items: center; gap: 8px; padding: 0 14px; color: var(--muted); font: 11px var(--mono); }
+  .health-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); box-shadow: 0 0 0 3px rgba(89,98,115,.12); }
+  .health.ok .health-dot { background: var(--success); box-shadow: 0 0 0 3px rgba(98,189,131,.12); }
+  .health.bad .health-dot { background: var(--danger); box-shadow: 0 0 0 3px rgba(226,108,108,.12); }
+  .workspace { height: calc(100% - 66px); display: grid; grid-template-columns: 46px 272px minmax(420px, 1fr) 310px; }
+  .rail { background: #090c10; border-right: 1px solid var(--line); display: flex; flex-direction: column; align-items: center; padding: 8px 0; gap: 5px; }
+  .rail-button { width: 34px; height: 34px; border: 0; border-radius: 6px; background: transparent; color: var(--faint); font: 600 11px var(--mono); cursor: pointer; }
+  .rail-button:hover, .rail-button.active { color: var(--text); background: var(--surface-3); }
+  .rail-spacer { flex: 1; }
+  .sidebar { min-width: 0; background: var(--surface); border-right: 1px solid var(--line); display: flex; flex-direction: column; }
+  .panel-heading { height: 39px; padding: 0 13px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); color: var(--muted); font: 600 10px var(--mono); letter-spacing: .12em; text-transform: uppercase; }
+  .quiet-button { border: 1px solid var(--line); background: var(--surface-2); border-radius: 5px; padding: 4px 8px; cursor: pointer; color: var(--muted); }
+  .quiet-button:hover { border-color: var(--line-strong); color: var(--text); }
+  .project-block { padding: 11px; border-bottom: 1px solid var(--line); }
+  select { width: 100%; color: var(--text); background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; outline: none; }
+  select:focus { border-color: var(--accent); }
+  .run-list { flex: 1; overflow: auto; padding: 7px; }
+  .run-item { width: 100%; text-align: left; border: 1px solid transparent; background: transparent; border-radius: 6px; padding: 9px; cursor: pointer; margin-bottom: 3px; }
+  .run-item:hover { background: var(--surface-2); }
+  .run-item.active { background: var(--accent-soft); border-color: rgba(215,168,74,.28); }
+  .run-title { color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 5px; }
+  .run-meta { display: flex; align-items: center; justify-content: space-between; color: var(--faint); font: 10px var(--mono); }
+  .status { color: var(--muted); }
+  .status.running, .status.created { color: var(--info); }
+  .status.waiting_review { color: var(--accent); }
+  .status.accepted, .status.succeeded { color: var(--success); }
+  .status.failed, .status.rejected { color: var(--danger); }
+  .conversation { min-width: 0; display: flex; flex-direction: column; background: var(--bg); }
+  .conversation-head { min-height: 56px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 12px; padding: 8px 16px; }
+  .conversation-title { min-width: 0; flex: 1; }
+  .conversation-title strong { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
+  .conversation-title span { color: var(--faint); font: 10px var(--mono); }
+  .action-button { border: 1px solid var(--line); background: var(--surface-2); border-radius: 6px; padding: 6px 10px; cursor: pointer; }
+  .action-button:hover:not(:disabled) { border-color: var(--line-strong); background: var(--surface-3); }
+  .action-button.primary { border-color: rgba(215,168,74,.5); color: var(--accent); }
+  .action-button.danger { color: var(--danger); }
+  .action-button:disabled { opacity: .35; cursor: default; }
+  .messages { flex: 1; overflow: auto; padding: 22px max(22px, calc((100% - 820px)/2)); scroll-behavior: smooth; }
+  .empty { height: 100%; min-height: 300px; display: grid; place-content: center; text-align: center; color: var(--muted); }
+  .empty-mark { width: 42px; height: 42px; margin: 0 auto 16px; border: 1px solid var(--line-strong); transform: rotate(45deg); position: relative; }
+  .empty-mark::after { content: ""; position: absolute; inset: 9px; border: 1px solid var(--accent); }
+  .empty h2 { margin: 0 0 7px; color: var(--text); font: 600 17px var(--sans); }
+  .empty p { margin: 0; max-width: 440px; }
+  .message { display: grid; grid-template-columns: 74px minmax(0,1fr); gap: 13px; padding: 15px 0; border-bottom: 1px solid rgba(37,43,53,.75); }
+  .message-role { color: var(--muted); font: 600 10px var(--mono); letter-spacing: .08em; text-transform: uppercase; padding-top: 3px; }
+  .message.user .message-role { color: var(--accent); }
+  .message.assistant .message-role { color: var(--info); }
+  .message-body { min-width: 0; white-space: pre-wrap; word-break: break-word; }
+  .message-body code { font-family: var(--mono); background: var(--surface-2); border: 1px solid var(--line); border-radius: 4px; padding: 1px 4px; }
+  .event-card { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); padding: 10px 12px; }
+  .event-card .event-title { display: flex; justify-content: space-between; gap: 12px; color: var(--muted); font: 11px var(--mono); }
+  .event-card .event-detail { margin-top: 7px; color: var(--text); }
+  .event-actions { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 10px; }
+  .event-actions button { border: 1px solid var(--line-strong); background: var(--surface-2); border-radius: 5px; padding: 5px 9px; cursor: pointer; }
+  .event-actions button:hover { border-color: var(--accent); }
+  .composer { margin: 0 max(16px, calc((100% - 850px)/2)) 16px; border: 1px solid var(--line-strong); background: var(--surface); border-radius: 10px; box-shadow: 0 12px 30px rgba(0,0,0,.25); }
+  .composer:focus-within { border-color: rgba(215,168,74,.62); box-shadow: 0 12px 30px rgba(0,0,0,.3), 0 0 0 2px rgba(215,168,74,.08); }
+  textarea { width: 100%; min-height: 78px; max-height: 220px; resize: vertical; border: 0; outline: 0; color: var(--text); background: transparent; padding: 13px 14px 8px; line-height: 1.5; }
+  textarea::placeholder { color: var(--faint); }
+  .composer-foot { display: flex; align-items: center; gap: 9px; padding: 7px 8px 8px 12px; border-top: 1px solid rgba(37,43,53,.7); }
+  .mode-button { border: 0; background: transparent; color: var(--muted); cursor: pointer; padding: 4px; font: 11px var(--mono); }
+  .mode-button:hover { color: var(--text); }
+  .composer-hint { color: var(--faint); font: 10px var(--mono); }
+  .send-button { margin-left: auto; min-width: 76px; border: 1px solid rgba(215,168,74,.55); background: var(--accent-soft); color: var(--accent); border-radius: 6px; padding: 6px 12px; cursor: pointer; }
+  .send-button:hover { background: rgba(215,168,74,.18); }
+  .send-button:disabled { opacity: .35; cursor: default; }
+  .inspector { min-width: 0; background: var(--surface); border-left: 1px solid var(--line); overflow: auto; }
+  .inspect-section { border-bottom: 1px solid var(--line); padding: 11px 13px; }
+  .inspect-label { color: var(--faint); font: 600 9px var(--mono); letter-spacing: .1em; text-transform: uppercase; margin-bottom: 7px; }
+  .inspect-row { display: grid; grid-template-columns: 82px minmax(0,1fr); gap: 8px; padding: 3px 0; font-size: 11px; }
+  .inspect-row span:first-child { color: var(--muted); }
+  .inspect-row code { font: 10px var(--mono); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .artifact { border: 1px solid var(--line); border-radius: 5px; padding: 7px; margin-top: 6px; cursor: pointer; }
+  .artifact:hover { border-color: var(--line-strong); }
+  .artifact strong { display: block; font-size: 11px; }
+  .artifact span { color: var(--faint); font: 9px var(--mono); }
+  .bottom-bar { height: 22px; display: flex; align-items: center; gap: 18px; padding: 0 9px; border-top: 1px solid var(--line); background: #0a0d11; color: var(--faint); font: 9px var(--mono); }
+  .bottom-bar .right { margin-left: auto; }
+  .toast { position: fixed; right: 18px; bottom: 36px; max-width: 460px; background: var(--surface-3); border: 1px solid var(--danger); color: var(--text); border-radius: 7px; padding: 10px 12px; box-shadow: 0 12px 28px rgba(0,0,0,.35); display: none; z-index: 10; font: 11px var(--mono); }
+  .toast.show { display: block; }
+  @media (max-width: 1080px) { .workspace { grid-template-columns: 46px 240px minmax(400px,1fr); } .inspector { display: none; } }
+  @media (max-width: 760px) { .topbar { grid-template-columns: 1fr auto; } .command-title { display: none; } .workspace { grid-template-columns: 42px minmax(0,1fr); } .sidebar { display: none; } .messages { padding: 16px; } .composer { margin: 0 10px 10px; } }
 </style>
 </head>
 <body>
-<header>
-  <h1>FLOYD</h1>
-  <div id="health">connecting…</div>
+<header class="topbar">
+  <div class="brand"><span class="brand-mark" aria-hidden="true"></span><span class="brand-name">FLOYD</span></div>
+  <div class="command-title" id="commandTitle">Natural-language coding partner</div>
+  <div class="health" id="health"><span class="health-dot"></span><span id="healthText">Connecting to Core</span></div>
 </header>
-<main>
-  <nav>
-    <h2>Runs</h2>
-    <div id="runs"></div>
-    <h2>Capabilities</h2>
-    <div class="unavail">terminal: unavailable — PTY provider not yet integrated (Phase D)</div>
-    <div class="unavail">media: unavailable — no provider passed e2e test (Phase F)</div>
-    <div class="unavail">mobile/browser/lab: unavailable — contracts only (Phase G)</div>
+<div class="workspace">
+  <nav class="rail" aria-label="Primary navigation">
+    <button class="rail-button active" title="Coding partner" aria-label="Coding partner">AI</button>
+    <button class="rail-button" title="Projects" aria-label="Projects">PR</button>
+    <button class="rail-button" title="Evidence" aria-label="Evidence">EV</button>
+    <div class="rail-spacer"></div>
+    <button class="rail-button" title="Settings" aria-label="Settings">ST</button>
   </nav>
-  <section id="detail"><p class="unavail">Select a run.</p></section>
-</main>
-<script>
-const qs = new URLSearchParams(location.search);
-const TOKEN = qs.get("token") || localStorage.getItem("floyd_token") || "";
-if (qs.get("token")) { localStorage.setItem("floyd_token", qs.get("token")); history.replaceState({}, "", "/"); }
-const H = { authorization: "Bearer " + TOKEN };
-const api = (p, opt={}) => fetch(p, { ...opt, headers: { ...H, ...(opt.body ? {"content-type":"application/json"} : {}) } }).then(r => r.json());
-const apiText = p => fetch(p, { headers: H }).then(r => r.text());
+  <aside class="sidebar">
+    <div class="panel-heading"><span>Workspace</span><button class="quiet-button" id="newTask">New</button></div>
+    <div class="project-block"><select id="projectSelect" aria-label="Active project"><option value="">No projects registered</option></select></div>
+    <div class="panel-heading"><span>Runs</span><span id="runCount">0</span></div>
+    <div class="run-list" id="runList"></div>
+  </aside>
+  <main class="conversation">
+    <div class="conversation-head">
+      <div class="conversation-title"><strong id="runTitle">New coding task</strong><span id="runIdentity">Select a project and describe the outcome</span></div>
+      <button class="action-button primary" id="acceptRun" disabled>Accept</button>
+      <button class="action-button danger" id="rejectRun" disabled>Reject</button>
+      <button class="action-button" id="escalateRun" disabled>Escalate</button>
+    </div>
+    <div class="messages" id="messages">
+      <div class="empty" id="emptyState"><div><div class="empty-mark" aria-hidden="true"></div><h2>Build with Floyd</h2><p>Describe a coding outcome in plain language. Floyd Core owns the run, OpenCode executes in a leased worktree, and every surface observes the same session.</p></div></div>
+    </div>
+    <div class="composer">
+      <textarea id="prompt" placeholder="Describe what you want built, fixed, or investigated…" aria-label="Coding request"></textarea>
+      <div class="composer-foot">
+        <button class="mode-button" id="modeButton" type="button">Mode: new run</button>
+        <span class="composer-hint">Command + Enter to send</span>
+        <button class="send-button" id="send" type="button">Send</button>
+      </div>
+    </div>
+  </main>
+  <aside class="inspector">
+    <div class="panel-heading"><span>Run context</span><span id="inspectStatus">Idle</span></div>
+    <div id="inspectorBody"><div class="inspect-section"><div class="inspect-label">Runtime boundary</div><div class="inspect-row"><span>Surface</span><code>@floyd/sdk</code></div><div class="inspect-row"><span>Authority</span><code>Floyd Core</code></div><div class="inspect-row"><span>Engine</span><code>OpenCode SDK</code></div></div></div>
+  </aside>
+</div>
+<footer class="bottom-bar"><span>Loopback-only Core</span><span id="routeLabel">Route: awaiting health</span><span class="right" id="clock"></span></footer>
+<div class="toast" id="toast" role="alert"></div>
 
-let currentRun = null;
+<script type="module">
+import { FloydBrowserClient, FloydApiError } from "/floyd-sdk.js";
+
+const query = new URLSearchParams(location.search);
+const queryToken = query.get("token");
+if (queryToken) {
+  sessionStorage.setItem("floyd_gateway_token", queryToken);
+  history.replaceState({}, "", location.pathname);
+}
+const token = () => sessionStorage.getItem("floyd_gateway_token") || "";
+const client = new FloydBrowserClient({ token });
+const actor = "douglas-cockpit";
+
+const app = {
+  state: { projects: [], sessions: [], runs: [], jobs: [], leases: [], provider_profiles: [] },
+  currentRunId: null,
+  currentRun: null,
+  currentSessionId: null,
+  mode: "new",
+  streamAbort: null,
+  transcripts: new Map(),
+  refreshTimer: null,
+};
+
+const el = (id) => document.getElementById(id);
+const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" })[char]);
+const shortId = (value) => String(value ?? "").length > 18 ? `${String(value).slice(0, 9)}…${String(value).slice(-6)}` : String(value ?? "");
+
+function notify(error) {
+  const toast = el("toast");
+  toast.textContent = error instanceof FloydApiError ? error.message : String(error);
+  toast.classList.add("show");
+  clearTimeout(notify.timer);
+  notify.timer = setTimeout(() => toast.classList.remove("show"), 7000);
+}
+
+function transcript(runId) {
+  if (!app.transcripts.has(runId)) app.transcripts.set(runId, []);
+  return app.transcripts.get(runId);
+}
+
+function addEntry(runId, entry) {
+  const items = transcript(runId);
+  if (entry.kind === "assistant-token" && items.at(-1)?.kind === "assistant") {
+    items.at(-1).text += entry.text;
+  } else if (entry.kind === "assistant-token") {
+    items.push({ kind: "assistant", text: entry.text });
+  } else {
+    items.push(entry);
+  }
+  if (app.currentRunId === runId) renderMessages();
+}
 
 async function refreshHealth() {
   try {
-    const h = await api("/api/health");
-    document.getElementById("health").textContent =
-      `core pid ${h.pid} @ ${new Date(h.started_at).toLocaleTimeString()} · engine ${h.engine.ok ? "OK" : "DOWN"} (opencode, loopback) · ${h.now}`;
-  } catch { document.getElementById("health").textContent = "core unreachable"; }
-}
-
-async function refreshRuns() {
-  const s = await api("/api/state");
-  const el = document.getElementById("runs");
-  el.innerHTML = "";
-  for (const r of s.runs) {
-    const d = document.createElement("div");
-    d.className = "card";
-    d.innerHTML = `<div class="status ${r.status}">${r.status}</div><div>${r.goal.slice(0,80)}</div><div class="id">${r.id}<br>project ${r.project_id}<br>session ${r.session_id}</div>`;
-    d.onclick = () => showRun(r.id);
-    el.appendChild(d);
+    const health = await client.health();
+    el("health").className = `health ${health.ok && health.engine?.ok ? "ok" : "bad"}`;
+    el("healthText").textContent = health.engine?.ok ? "Core and engine online" : "Core online, engine unavailable";
+    el("routeLabel").textContent = `Route: Core ${health.version} / OpenCode loopback`;
+  } catch (error) {
+    el("health").className = "health bad";
+    el("healthText").textContent = token() ? "Core unreachable" : "Gateway token required";
+    el("routeLabel").textContent = "Route: disconnected";
   }
-  if (currentRun) showRun(currentRun, true);
 }
 
-async function showRun(id, soft) {
-  const isNew = currentRun !== id;
-  currentRun = id;
-  if (isNew) setTimeout(async () => {
-    const rd = await api("/api/runs/" + id);
-    attachRunStream(id, rd.session_id);
-  }, 50);
-  const r = await api("/api/runs/" + id);
-  const ev = await api("/api/evidence?run_id=" + id);
-  const diff = await apiText(`/api/runs/${id}/artifact/diff`).catch(()=> "");
-  const tests = await apiText(`/api/runs/${id}/artifact/test_output`).catch(()=> "");
-  const canDecide = r.status === "waiting_review";
-  const jobs = (r.jobs||[]).map(j =>
-    `<div class="evrow">${j.kind} <span class="status ${j.status}">${j.status}</span> <span class="id">${j.id} · engine session ${j.engine_session_id ?? "—"} · lease ${j.worktree_lease_id ?? "—"}</span></div>`).join("");
-  const arts = (r.artifacts||[]).map(a => `<div class="evrow">${a.role}: <span class="id">${a.id}</span> (${a.bytes} B)</div>`).join("");
-  const evs = (ev.events||[]).map(e => `<div class="evrow"><span class="t">${e.type}</span> <span class="id">${e.ts} ${e.id}</span></div>`).join("");
-  document.getElementById("detail").innerHTML = `
-    <h2>Run ${r.id} — <span class="status ${r.status}">${r.status}</span></h2>
-    <div>${r.goal}</div>
-    <div class="id">project ${r.project_id} · session ${r.session_id}</div>
-    <p>
-      <button class="accept" ${canDecide?"":"disabled"} onclick="decide('accept')">Accept &amp; merge</button>
-      <button class="reject" ${canDecide?"":"disabled"} onclick="decide('reject')">Reject</button>
-      <button ${canDecide?"":"disabled"} onclick="decide('escalate')">Escalate</button>
-    </p>
-    <h2>Live channel</h2>
-    <p><input id="steerText" placeholder="steer the builder mid-run…" style="width:60%;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:6px 10px;font:inherit">
-    <button onclick="steerRun()">Steer</button></p>
-    <pre id="livefeed" style="max-height:220px">(attach: live engine events for this run appear here)</pre>
-    <h2>Jobs</h2>${jobs || "<div class='unavail'>none</div>"}
-    <h2>Artifacts</h2>${arts || "<div class='unavail'>none</div>"}
-    <h2>Diff</h2><pre>${escapeHtml(diff || "(none yet)")}</pre>
-    <h2>Test output</h2><pre>${escapeHtml(tests || "(none yet)")}</pre>
-    <h2>Evidence (${(ev.events||[]).length})</h2>${evs}`;
-  if (!soft) window.scrollTo(0,0);
+async function refreshState({ preserveInspector = true } = {}) {
+  try {
+    app.state = await client.state();
+    renderProjects();
+    renderRuns();
+    if (app.currentRunId) {
+      const fresh = app.state.runs.find((run) => run.id === app.currentRunId);
+      if (fresh) {
+        app.currentRun = { ...app.currentRun, ...fresh };
+        renderHeader();
+        if (!preserveInspector) await renderInspector();
+      }
+    }
+  } catch (error) {
+    if (token()) notify(error);
+  }
 }
 
-function escapeHtml(s){ return s.replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+function renderProjects() {
+  const select = el("projectSelect");
+  const prior = select.value;
+  select.innerHTML = app.state.projects.length
+    ? app.state.projects.map((project) => `<option value="${escapeHtml(project.id)}">${escapeHtml(project.name)}</option>`).join("")
+    : '<option value="">No projects registered</option>';
+  if (app.state.projects.some((project) => project.id === prior)) select.value = prior;
+  else if (app.currentRun?.project_id) select.value = app.currentRun.project_id;
+}
+
+function renderRuns() {
+  const list = el("runList");
+  el("runCount").textContent = String(app.state.runs.length);
+  list.innerHTML = app.state.runs.map((run) => `
+    <button class="run-item ${run.id === app.currentRunId ? "active" : ""}" data-run-id="${escapeHtml(run.id)}">
+      <div class="run-title">${escapeHtml(run.goal)}</div>
+      <div class="run-meta"><span class="status ${escapeHtml(run.status)}">${escapeHtml(run.status)}</span><span>${escapeHtml(shortId(run.id))}</span></div>
+    </button>`).join("") || '<div class="inspect-section" style="color:var(--faint)">No runs yet.</div>';
+}
+
+function renderHeader() {
+  const run = app.currentRun;
+  el("runTitle").textContent = run?.goal || "New coding task";
+  el("runIdentity").textContent = run ? `${run.id} / session ${run.session_id}` : "Select a project and describe the outcome";
+  const canDecide = run?.status === "waiting_review";
+  for (const id of ["acceptRun", "rejectRun", "escalateRun"]) el(id).disabled = !canDecide;
+  el("inspectStatus").textContent = run?.status || "Idle";
+}
+
+function renderMessages() {
+  const container = el("messages");
+  if (!app.currentRunId) {
+    container.innerHTML = '<div class="empty"><div><div class="empty-mark" aria-hidden="true"></div><h2>Build with Floyd</h2><p>Describe a coding outcome in plain language. Floyd Core owns the run, OpenCode executes in a leased worktree, and every surface observes the same session.</p></div></div>';
+    return;
+  }
+  const entries = transcript(app.currentRunId);
+  container.innerHTML = entries.map((entry, index) => {
+    if (entry.kind === "user" || entry.kind === "assistant" || entry.kind === "system") {
+      return `<article class="message ${entry.kind}"><div class="message-role">${entry.kind === "user" ? "You" : entry.kind === "assistant" ? "Floyd" : "System"}</div><div class="message-body">${escapeHtml(entry.text)}</div></article>`;
+    }
+    if (entry.kind === "question") {
+      const question = entry.data.questions?.[0]?.question || "The coding engine needs your input.";
+      const options = entry.data.questions?.[0]?.options || [];
+      return `<article class="message"><div class="message-role">Input</div><div class="message-body event-card"><div class="event-title"><span>Question</span><span>${escapeHtml(entry.data.id)}</span></div><div class="event-detail">${escapeHtml(question)}</div><div class="event-actions">${options.map((option) => `<button data-question-index="${index}" data-answer="${escapeHtml(option.label)}">${escapeHtml(option.label)}</button>`).join("")}<button data-question-index="${index}" data-answer="__custom__">Custom answer</button></div></div></article>`;
+    }
+    if (entry.kind === "permission") {
+      const action = entry.data.action || entry.data.permission || "requested action";
+      const resources = entry.data.resources || entry.data.patterns || [];
+      return `<article class="message"><div class="message-role">Policy</div><div class="message-body event-card"><div class="event-title"><span>Permission request</span><span>${escapeHtml(entry.data.id)}</span></div><div class="event-detail">${escapeHtml(action)}${resources.length ? ` / ${escapeHtml(resources.join(", "))}` : ""}</div><div class="event-actions"><button data-permission-index="${index}" data-reply="once">Allow once</button><button data-permission-index="${index}" data-reply="reject">Reject</button></div></div></article>`;
+    }
+    return `<article class="message"><div class="message-role">Event</div><div class="message-body event-card"><div class="event-title"><span>${escapeHtml(entry.title || entry.kind)}</span><span>${escapeHtml(entry.id || "")}</span></div><div class="event-detail">${escapeHtml(entry.text || "")}</div></div></article>`;
+  }).join("");
+  container.scrollTop = container.scrollHeight;
+}
+
+async function renderInspector() {
+  const run = app.currentRun;
+  if (!run) return;
+  try {
+    const [detail, evidence] = await Promise.all([client.run(run.id), client.evidence(run.id)]);
+    app.currentRun = detail;
+    const jobs = detail.jobs || [];
+    const artifacts = detail.artifacts || [];
+    el("inspectorBody").innerHTML = `
+      <div class="inspect-section"><div class="inspect-label">Identity</div>
+        <div class="inspect-row"><span>Run</span><code title="${escapeHtml(detail.id)}">${escapeHtml(shortId(detail.id))}</code></div>
+        <div class="inspect-row"><span>Project</span><code title="${escapeHtml(detail.project_id)}">${escapeHtml(shortId(detail.project_id))}</code></div>
+        <div class="inspect-row"><span>Session</span><code title="${escapeHtml(detail.session_id)}">${escapeHtml(shortId(detail.session_id))}</code></div>
+        <div class="inspect-row"><span>Evidence</span><code>${evidence.events?.length || 0} events</code></div>
+      </div>
+      <div class="inspect-section"><div class="inspect-label">Engine jobs</div>${jobs.map((job) => `
+        <div class="inspect-row"><span>${escapeHtml(job.kind)}</span><code>${escapeHtml(job.status)}</code></div>
+        <div class="inspect-row"><span>Engine ID</span><code title="${escapeHtml(job.engine_session_id || "pending")}">${escapeHtml(shortId(job.engine_session_id || "pending"))}</code></div>`).join("") || '<div class="inspect-row"><span>State</span><code>not scheduled</code></div>'}</div>
+      <div class="inspect-section"><div class="inspect-label">Artifacts</div>${artifacts.map((artifact) => `<div class="artifact" data-artifact-role="${escapeHtml(artifact.role)}"><strong>${escapeHtml(artifact.role)}</strong><span>${escapeHtml(shortId(artifact.id))} / ${artifact.bytes} bytes</span></div>`).join("") || '<div style="color:var(--faint)">No artifacts yet.</div>'}</div>
+      <div class="inspect-section"><div class="inspect-label">Runtime boundary</div><div class="inspect-row"><span>Surface</span><code>@floyd/sdk</code></div><div class="inspect-row"><span>Authority</span><code>Floyd Core</code></div><div class="inspect-row"><span>Engine</span><code>OpenCode SDK</code></div></div>`;
+  } catch (error) { notify(error); }
+}
+
+async function selectRun(runId) {
+  app.streamAbort?.abort();
+  app.streamAbort = null;
+  app.currentRunId = runId;
+  app.currentRun = await client.run(runId);
+  app.currentSessionId = app.currentRun.session_id;
+  app.mode = "steer";
+  if (!app.transcripts.has(runId)) {
+    app.transcripts.set(runId, [
+      { kind: "user", text: app.currentRun.goal },
+      { kind: "system", text: `Run ${app.currentRun.status}. Floyd Core is the authority for this session.` },
+    ]);
+  }
+  el("modeButton").textContent = "Mode: guide active run";
+  renderRuns(); renderHeader(); renderMessages(); await renderInspector();
+  attachSession(runId, app.currentSessionId);
+}
+
+function attachSession(runId, sessionId) {
+  const controller = new AbortController();
+  app.streamAbort = controller;
+  void (async () => {
+    try {
+      for await (const event of client.attachSession(sessionId, actor, { signal: controller.signal })) {
+        if (event.type === "hello") continue;
+        const payload = event.data || {};
+        const data = payload.data || {};
+        if (event.type === "token" && payload.channel === "text") {
+          addEntry(runId, { kind: "assistant-token", text: String(data.delta ?? data.text ?? "") });
+        } else if (event.type === "tool_call_start") {
+          addEntry(runId, { kind: "tool", title: "Tool started", text: String(data.tool ?? data.name ?? "tool"), id: event.id });
+        } else if (event.type === "tool_call_finish") {
+          addEntry(runId, { kind: "tool", title: "Tool finished", text: String(data.tool ?? data.name ?? "tool"), id: event.id });
+        } else if (event.type === "question") {
+          addEntry(runId, { kind: "question", data });
+        } else if (event.type === "permission") {
+          addEntry(runId, { kind: "permission", data });
+        } else if (["phase", "error", "done"].includes(event.type)) {
+          addEntry(runId, { kind: "event", title: event.type, text: JSON.stringify(data), id: event.id });
+        }
+      }
+    } catch (error) {
+      if (!controller.signal.aborted) notify(error);
+    }
+  })();
+}
+
+async function sendPrompt() {
+  const prompt = el("prompt");
+  const text = prompt.value.trim();
+  if (!text) return;
+  el("send").disabled = true;
+  try {
+    if (app.mode === "steer" && app.currentSessionId) {
+      await client.steer(app.currentSessionId, text, actor);
+      addEntry(app.currentRunId, { kind: "user", text });
+    } else {
+      const projectId = el("projectSelect").value;
+      if (!projectId) throw new Error("Register or select a project before starting a run.");
+      const created = await client.submit(projectId, text);
+      prompt.value = "";
+      await refreshState();
+      await selectRun(created.run_id);
+      return;
+    }
+    prompt.value = "";
+  } catch (error) { notify(error); }
+  finally { el("send").disabled = false; prompt.focus(); }
+}
+
+function startNewTask() {
+  app.streamAbort?.abort();
+  app.currentRunId = null;
+  app.currentRun = null;
+  app.currentSessionId = null;
+  app.mode = "new";
+  el("modeButton").textContent = "Mode: new run";
+  renderRuns(); renderHeader(); renderMessages();
+  el("prompt").focus();
+}
 
 async function decide(action) {
-  if (!currentRun) return;
-  if (!confirm(`${action} run ${currentRun}?`)) return;
-  await api(`/api/runs/${currentRun}/decision`, { method:"POST", body: JSON.stringify({ action, actor: "douglas-cockpit" }) });
-  await refreshRuns(); await showRun(currentRun, true);
+  if (!app.currentRunId) return;
+  try {
+    await client.decide(app.currentRunId, action, actor);
+    addEntry(app.currentRunId, { kind: "system", text: `Decision recorded: ${action}.` });
+    await refreshState({ preserveInspector: false });
+  } catch (error) { notify(error); }
 }
 
-let runEs = null, currentSession = null;
-function attachRunStream(id, sessionId) {
-  if (runEs) { runEs.close(); runEs = null; }
-  currentSession = sessionId;
-  const feed = () => document.getElementById("livefeed");
-  const append = (txt) => { const el = feed(); if (!el) return; if (el.textContent.startsWith("(attach")) el.textContent = ""; el.textContent += txt; el.scrollTop = el.scrollHeight; };
-  // primary channel: bidirectional session events (token/tool/question/permission)
-  runEs = new EventSource(`/api/sessions/${sessionId}/events?token=` + encodeURIComponent(TOKEN));
-  runEs.addEventListener("token", ev => {
-    const e = JSON.parse(ev.data); const d = e.data || {};
-    if (e.channel === "text") append(String(d.delta ?? d.text ?? ""));
-  });
-  runEs.addEventListener("tool_call_start", ev => {
-    const e = JSON.parse(ev.data); append(`\n⚙ ${((e.data||{}).tool)||"tool"} …`);
-  });
-  runEs.addEventListener("tool_call_finish", ev => { append(" done\n"); });
-  runEs.addEventListener("question", ev => {
-    const e = JSON.parse(ev.data); const rid = (e.data||{}).id;
-    const label = prompt(`Agent question (request ${rid}) — type your answer label:`);
-    if (label) api(`/api/sessions/${currentSession}/steer`, { method:"POST", body: JSON.stringify({ type:"answer", request_id: rid, answers: [[label]], actor: "douglas-cockpit" }) });
-  });
-  runEs.addEventListener("permission", ev => {
-    const e = JSON.parse(ev.data); const d = e.data||{}; const rid = d.id;
-    append(`\n🔐 permission ask: ${d.action} ${(d.resources||[]).join(",")}\n`);
-    const ok = confirm(`Grant ${d.action} for ${(d.resources||[]).join(", ")}?`);
-    api(`/api/sessions/${currentSession}/steer`, { method:"POST", body: JSON.stringify({ type:"permission", request_id: rid, reply: ok ? "once" : "reject", actor: "douglas-cockpit" }) });
-  });
-}
+el("runList").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-run-id]");
+  if (button) selectRun(button.dataset.runId).catch(notify);
+});
+el("messages").addEventListener("click", async (event) => {
+  const answerButton = event.target.closest("[data-question-index]");
+  const permissionButton = event.target.closest("[data-permission-index]");
+  try {
+    if (answerButton) {
+      const entry = transcript(app.currentRunId)[Number(answerButton.dataset.questionIndex)];
+      let answer = answerButton.dataset.answer;
+      if (answer === "__custom__") answer = window.prompt("Answer the agent question:")?.trim();
+      if (answer) await client.answer(app.currentSessionId, entry.data.id, [[answer]], actor);
+    } else if (permissionButton) {
+      const entry = transcript(app.currentRunId)[Number(permissionButton.dataset.permissionIndex)];
+      await client.permission(app.currentSessionId, entry.data.id, permissionButton.dataset.reply, actor);
+    }
+  } catch (error) { notify(error); }
+});
+el("inspectorBody").addEventListener("click", async (event) => {
+  const card = event.target.closest("[data-artifact-role]");
+  if (!card || !app.currentRunId) return;
+  try {
+    const content = await client.artifact(app.currentRunId, card.dataset.artifactRole);
+    addEntry(app.currentRunId, { kind: "event", title: `Artifact: ${card.dataset.artifactRole}`, text: typeof content === "string" ? content : JSON.stringify(content, null, 2) });
+  } catch (error) { notify(error); }
+});
+el("newTask").addEventListener("click", startNewTask);
+el("modeButton").addEventListener("click", () => {
+  if (!app.currentRunId) return;
+  app.mode = app.mode === "new" ? "steer" : "new";
+  el("modeButton").textContent = app.mode === "new" ? "Mode: new run" : "Mode: guide active run";
+});
+el("send").addEventListener("click", sendPrompt);
+el("prompt").addEventListener("keydown", (event) => {
+  if ((event.metaKey || event.ctrlKey) && event.key === "Enter") { event.preventDefault(); sendPrompt(); }
+});
+el("acceptRun").addEventListener("click", () => decide("accept"));
+el("rejectRun").addEventListener("click", () => decide("reject"));
+el("escalateRun").addEventListener("click", () => decide("escalate"));
 
-async function steerRun() {
-  const text = document.getElementById("steerText").value.trim();
-  if (!currentSession || !text) return;
-  await api(`/api/sessions/${currentSession}/steer`, { method: "POST", body: JSON.stringify({ type: "steer", text, actor: "douglas-cockpit" }) });
-  document.getElementById("steerText").value = "";
-}
-
-function connectSse() {
-  const es = new EventSource("/api/events?token=" + encodeURIComponent(TOKEN));
-  es.addEventListener("run", () => refreshRuns());
-  es.onerror = () => { es.close(); setTimeout(connectSse, 3000); };
-}
-
-refreshHealth(); refreshRuns(); connectSse();
+setInterval(() => { el("clock").textContent = new Date().toLocaleTimeString(); }, 1000);
 setInterval(refreshHealth, 5000);
+app.refreshTimer = setInterval(() => refreshState(), 3500);
+await refreshHealth();
+await refreshState();
 </script>
 </body>
 </html>

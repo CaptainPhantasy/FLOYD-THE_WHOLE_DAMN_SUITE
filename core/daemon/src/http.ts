@@ -14,6 +14,7 @@ import { normalizeEngineEvent, type SessionMap } from "./live-channel.ts";
 import { classifyEngineEvent, SessionBuffer } from "./session-channel.ts";
 
 const COCKPIT_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "apps", "cockpit", "public");
+const BROWSER_SDK = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "packages", "sdk", "browser", "floyd-sdk.js");
 
 type SseClient = { res: ServerResponse; run_id?: string };
 const sseClients = new Set<SseClient>();
@@ -406,6 +407,9 @@ export function startGateway(db: Db, engine: OpenCodeEngine, corePid: number, st
 
       // ---------- cockpit static ----------
       if (isStatic) {
+        if (path === "/floyd-sdk.js") {
+          return send(res, 200, readFileSync(BROWSER_SDK, "utf8"), "text/javascript; charset=utf-8");
+        }
         const file = path === "/" ? "index.html" : path.slice(1);
         const full = join(COCKPIT_DIR, file);
         if (!full.startsWith(COCKPIT_DIR)) return send(res, 403, { error: "forbidden" });

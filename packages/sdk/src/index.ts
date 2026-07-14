@@ -49,7 +49,7 @@ export class FloydClient {
   constructor(options: FloydClientOptions) {
     this.baseUrl = (options.baseUrl ?? DEFAULT_FLOYD_CORE_URL).replace(/\/+$/, "");
     this.tokenSource = options.token;
-    this.fetchImpl = options.fetch ?? globalThis.fetch;
+    this.fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
   }
 
   private async token(): Promise<string> {
