@@ -317,7 +317,7 @@ A 2026-07-12 audit found a self-resurrecting `com.floyd.core` launchd daemon, a 
 
 - Douglas removed ADKv2Agent and The_Burner from the active integration list before work began on either component.
 - Neither protected donor nor either intake copy was modified. Existing intake directories remain untouched as historical provenance; they are excluded from the active manifest and copy-preparation loop rather than deleted.
-- The active five-surface system is Desktop, IDE, OhMyFloyd, TerminalOne, and harness-launcher. OhMyFloyd is the only component integration still pending.
+- The active five-surface system is Desktop, IDE, OhMyFloyd, TerminalOne, and harness-launcher. At the time of this scope change, OhMyFloyd was the only component integration still pending; it is now complete below.
 
 ## OhMyFloyd Core integration — 2026-07-14
 
