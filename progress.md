@@ -291,3 +291,12 @@ A 2026-07-12 audit found a self-resurrecting `com.floyd.core` launchd daemon, a 
 - Build passed, Vitest passed 6/6, production audit found zero vulnerabilities, live Desktop `/api/core/health` returned HTTP 200 with Core and OpenCode healthy, and rendered Puppeteer proof showed the Core route, no provider-key UI, no emoji, and no page errors.
 - Live launch also exposed a donor crash on occupied MCP port 3005. The auxiliary port is now configurable and bind failure degrades only the Chrome extension bridge; Desktop stayed online during the repeated occupied-port proof.
 - Component commit `11015cf9f8dba2cb5dc81a16b4e131ea234140a0` pushed to `CaptainPhantasy/floyd-desktop-web-v2` branch `feat/floyd-core-runtime`.
+
+## IDE Core and folder-workspace integration — 2026-07-14
+
+- Verified the existing folder workspace implementation instead of replacing it: welcome screen, Projects panel, command palette, top bar, and File Explorer expose Open Folder; `/api/fs/workspace-info` validates a directory before the IDE switches roots and persists recent/last workspace state.
+- Replaced the rendered provider-key assistant with a natural-language Floyd Coding Partner. Its server-side vendored `@floyd/sdk` bridge resolves or registers the current folder in Floyd Core, submits a new run or steers the durable session, normalizes Core SSE for the pane, and aborts the Core reader when the client disconnects.
+- Legacy `/api/llm/*` provider routes and unused `src/lib/llm.ts` remain in the donor for migration compatibility, but `AIChatPanel.tsx` no longer imports or exposes them. Their eventual removal is a separate breaking cleanup.
+- Upgraded Express to 4.22.2 and WebSocket to 8.21.0. Production audit moved from four advisories to zero; full-install dev advisories remain.
+- Verification passed: `npm run lint`, `npm run build`, production audit zero, live Core health HTTP 200 with OpenCode healthy, live folder workspace HTTP 200 for `/Volumes/Storage/FLOYD_WORKSTATION`, and installed-Chrome rendered proof with enabled Core input, no provider-key UI, no emoji, and no page errors.
+- Component commit `e094896512d97bfd65935cd25da5c30a55848dae` pushed to `CaptainPhantasy/mobile-web-IDE` branch `feat/floyd-core-runtime`.

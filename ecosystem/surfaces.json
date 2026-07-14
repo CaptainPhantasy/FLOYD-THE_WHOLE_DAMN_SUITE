@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "verified_at": "2026-07-14T00:13:00-04:00",
+  "verified_at": "2026-07-14T00:22:00-04:00",
   "authority": {
     "source_control": "/Volumes/Storage/FLOYD_WORKSTATION",
     "runtime": "/Volumes/Storage/FLOYD_RUNTIME",
@@ -42,6 +42,16 @@
       "source_state": "donor; copy and provenance verification required",
       "intake_copy": "/Volumes/Storage/FLOYD_WORKSTATION/intake/surfaces/ide",
       "copy_verified": true,
+      "integration": {
+        "status": "verified_component_branch",
+        "branch": "feat/floyd-core-runtime",
+        "commit": "e094896512d97bfd65935cd25da5c30a55848dae",
+        "remote_ref": "origin/feat/floyd-core-runtime",
+        "contract": "vendored @floyd/sdk -> server-side Floyd Core bridge -> managed OpenCode SDK",
+        "production_audit_vulnerabilities": 0,
+        "rendered_proof": true,
+        "folder_workspace_proof": true
+      },
       "target": "apps/ide",
       "direct_opencode_access": false
     },

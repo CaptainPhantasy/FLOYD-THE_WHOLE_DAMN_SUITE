@@ -330,9 +330,10 @@ every item there is checked with evidence and blueprint gates A–H pass.
 - [ ] Admit independently writable copies of desktop, IDE, TUI, PTY, launcher, ADK, and mobile sources into their canonical targets.
 - [ ] Replace each admitted surface's direct backend/model ownership with `@floyd/sdk`.
 - [x] Route the Desktop coding pane through a server-side `@floyd/sdk` bridge, preserve Core errors, propagate aborts, remove provider-key UI and emoji, and record verified component commit `11015cf`.
+- [x] Route the IDE coding pane through a server-side `@floyd/sdk` bridge and prove folder-as-workspace behavior, Core health, rendered pane state, and component commit `e094896`.
 - [ ] Add launch, health, recovery, and cross-surface runtime acceptance receipts.
 - [ ] Publish verified logical commits to the whole-suite remote.
-- **Status:** in progress; foundational runtime/client boundary and Desktop component integration verified. IDE, TUI, PTY, launcher, ADK, and mobile remain pending.
+- **Status:** in progress; foundational runtime/client boundary plus Desktop and IDE component integrations verified. TUI, PTY, launcher, ADK, and mobile remain pending.
 
 ## Plan Maintenance
 
