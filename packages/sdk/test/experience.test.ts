@@ -215,6 +215,39 @@ test("typed and browser clients expose the same device and handoff lifecycle", a
   }
 });
 
+test("typed and browser clients expose the same connector lifecycle without actor spoofing", async () => {
+  for (const Client of [FloydClient, FloydBrowserClient] as const) {
+    const seen: Request[] = [];
+    const client = new Client({
+      baseUrl: "http://127.0.0.1:41414",
+      token: "core-token",
+      fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request = input instanceof Request ? input : new Request(input, init);
+        seen.push(request.clone());
+        return Response.json({ ok: true });
+      },
+    }) as FloydClient;
+    await client.connectors();
+    await client.createConnector({
+      id: "user-openai", displayName: "User OpenAI", provider: "openai", baseUrl: "https://api.openai.com/v1",
+    });
+    await client.storeConnectorApiKey("user/openai", "provider-secret");
+    await client.startConnectorOAuth("user/openai", "http://127.0.0.1:7777/callback", 60_000);
+    await client.completeConnectorOAuth("oauth-state", "oauth-code");
+    await client.revokeConnector("user/openai");
+
+    assert.deepEqual(seen.map((request) => [request.method, new URL(request.url).pathname]), [
+      ["GET", "/api/connectors"],
+      ["POST", "/api/connectors"],
+      ["POST", "/api/connectors/user%2Fopenai/api-key"],
+      ["POST", "/api/connectors/user%2Fopenai/oauth/start"],
+      ["POST", "/api/connectors/oauth/callback"],
+      ["DELETE", "/api/connectors/user%2Fopenai"],
+    ]);
+    for (const request of seen) assert.equal((await request.text()).includes("actor"), false);
+  }
+});
+
 test("typed and browser clients preserve run scope for attach and steering", async () => {
   for (const Client of [FloydClient, FloydBrowserClient] as const) {
     const seen: Request[] = [];

@@ -117,6 +117,101 @@ test("relay echoes the vendor's exact non-200 status and error payload", async (
   }
 });
 
+test("relay injects a bound connector credential and rejects endpoint substitution", async () => {
+  let seenAuthorization = "";
+  const upstream = createServer((_req, res) => {
+    seenAuthorization = _req.headers.authorization ?? "";
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end('{"ok":true}');
+  });
+  const upstreamPort = await listen(upstream);
+  const credential = {
+    provider: "openai" as const,
+    baseUrl: `http://127.0.0.1:${upstreamPort}/v1`,
+    authorization: "Bearer encrypted-authority-secret",
+  };
+  const relay = createServer((req, res) => { void relayProviderRequest(req, res, credential).catch((error) => {
+    res.writeHead(Number(error.statusCode ?? 500), { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: error.message }));
+  }); });
+  const relayPort = await listen(relay);
+  try {
+    const body = JSON.stringify({ model: "gpt-test", messages: [{ role: "user", content: "hi" }], stream: false });
+    const response = await fetch(`http://127.0.0.1:${relayPort}/gateway`, {
+      method: "POST", headers: { "content-type": "application/json" }, body,
+    });
+    assert.equal(response.status, 200);
+    assert.equal(seenAuthorization, "Bearer encrypted-authority-secret");
+
+    const substituted = await fetch(`http://127.0.0.1:${relayPort}/gateway`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-floyd-base-url": "http://127.0.0.1:9/v1" },
+      body,
+    });
+    assert.equal(substituted.status, 400);
+    assert.match(await substituted.text(), /bound to a different provider endpoint/);
+  } finally {
+    await close(relay);
+    await close(upstream);
+  }
+});
+
+test("relay preserves provider errors delivered inside a successful SSE response", async () => {
+  const upstream = createServer((_req, res) => {
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.write('event: error\ndata: {"error":{"type":"overloaded","message":"try later"}}\n\n');
+    res.write('data: {"choices":[{"delta":{"content":"must-not-follow"}}]}\n\n');
+    res.end("data: [DONE]\n\n");
+  });
+  const upstreamPort = await listen(upstream);
+  const relay = createServer((req, res) => { void relayProviderRequest(req, res).catch((error) => res.destroy(error)); });
+  const relayPort = await listen(relay);
+  try {
+    const response = await fetch(`http://127.0.0.1:${relayPort}/gateway`, {
+      method: "POST",
+      headers: {
+        authorization: "Bearer provider-secret",
+        "x-floyd-provider": "openai",
+        "x-floyd-base-url": `http://127.0.0.1:${upstreamPort}/v1`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ model: "gpt-test", messages: [{ role: "user", content: "hi" }], stream: true }),
+    });
+    assert.equal(response.status, 200);
+    assert.equal(await response.text(), 'event: error\ndata: {"error":{"type":"overloaded","message":"try later"}}\n\n');
+  } finally {
+    await close(relay);
+    await close(upstream);
+  }
+});
+
+test("relay terminates an oversized provider SSE frame with a normalized error", async () => {
+  const upstream = createServer((_req, res) => {
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.end(`data: ${"x".repeat(1024 * 1024 + 1)}`);
+  });
+  const upstreamPort = await listen(upstream);
+  const relay = createServer((req, res) => { void relayProviderRequest(req, res).catch((error) => res.destroy(error)); });
+  const relayPort = await listen(relay);
+  try {
+    const response = await fetch(`http://127.0.0.1:${relayPort}/gateway`, {
+      method: "POST",
+      headers: {
+        authorization: "Bearer provider-secret",
+        "x-floyd-provider": "openai",
+        "x-floyd-base-url": `http://127.0.0.1:${upstreamPort}/v1`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ model: "gpt-test", messages: [], stream: true }),
+    });
+    assert.equal(response.status, 200);
+    assert.match(await response.text(), /relay_frame_too_large/);
+  } finally {
+    await close(relay);
+    await close(upstream);
+  }
+});
+
 test("client abort destroys the active upstream response/socket", async () => {
   let upstreamClosed = false;
   const upstream = createServer((_req, res) => {

@@ -15,6 +15,7 @@ import { listSkills, loadSkill, registerSkill } from "./skills.ts";
 import { normalizeEngineEvent, type SessionMap } from "./live-channel.ts";
 import { classifyEngineEvent, SessionBuffer } from "./session-channel.ts";
 import { relayProviderRequest } from "./provider-gateway.ts";
+import { ConnectorAuthorityError, ConnectorAuthorityService } from "./connector-authority.ts";
 import {
   ExperienceConflictError,
   getExperience,
@@ -341,6 +342,21 @@ function send(res: ServerResponse, code: number, body: unknown, mime = "applicat
   res.end(out);
 }
 
+function requestObject(body: unknown): Record<string, unknown> {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new ConnectorAuthorityError("invalid_input", "request body must be a JSON object", 400);
+  }
+  return body as Record<string, unknown>;
+}
+
+function requestAbortSignal(req: IncomingMessage, res: ServerResponse): AbortSignal {
+  const controller = new AbortController();
+  const abort = () => controller.abort(new Error("client disconnected"));
+  req.once("aborted", abort);
+  res.once("close", abort);
+  return controller.signal;
+}
+
 function remoteRouteScope(method: string | undefined, path: string): ExperienceDeviceSessionScope | null | undefined {
   if (method === "GET" && path === "/api/health") return "health:read";
   if (method === "GET" && path === "/api/state") return "state:read";
@@ -430,6 +446,10 @@ function createGateway(
     evidence: (event) => appendEvidence(db, event.type, event.actor, event.payload),
     sessionInvalidated: closeRemoteStreams,
   });
+  const connectors = boundary === "local" ? new ConnectorAuthorityService(db, {
+    masterKeyPath: PATHS.connectorMasterKey,
+    evidence: (event) => appendEvidence(db, event.type, event.actor, event.payload),
+  }) : null;
 
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", `http://${LOOPBACK}:${CORE_PORT}`);
@@ -455,7 +475,7 @@ function createGateway(
       if (req.method === "OPTIONS") {
         res.writeHead(204, {
           "access-control-allow-methods": "POST, OPTIONS",
-          "access-control-allow-headers": "content-type, authorization, x-api-key, anthropic-version, x-floyd-token, x-floyd-provider, x-floyd-base-url",
+          "access-control-allow-headers": "content-type, authorization, x-api-key, anthropic-version, x-floyd-token, x-floyd-provider, x-floyd-base-url, x-floyd-credential-ref",
           "access-control-max-age": "600",
         });
         return res.end();
@@ -519,7 +539,14 @@ function createGateway(
     try {
       if (isProviderGateway) {
         if (req.method !== "POST") return send(res, 405, { error: "gateway is POST" });
-        await relayProviderRequest(req, res);
+        const credentialRef = Array.isArray(req.headers["x-floyd-credential-ref"])
+          ? req.headers["x-floyd-credential-ref"][0]
+          : req.headers["x-floyd-credential-ref"];
+        if (credentialRef && (req.headers.authorization || req.headers["x-api-key"])) {
+          return send(res, 400, { error: "credential_ambiguous", message: "connector references cannot be combined with raw provider credentials" });
+        }
+        const credential = credentialRef ? await connectors!.resolve(credentialRef, requestAbortSignal(req, res)) : undefined;
+        await relayProviderRequest(req, res, credential);
         return;
       }
       // ---------- API ----------
@@ -542,6 +569,53 @@ function createGateway(
           now: nowIso(),
           engine: { ok: await engine.isHealthy(), url: engine.baseUrl, pid: engine.child?.pid ?? null },
         });
+      }
+      if (path === "/api/connectors" && req.method === "GET") {
+        res.setHeader("cache-control", "no-store");
+        return send(res, 200, { connectors: connectors!.profiles() });
+      }
+      if (path === "/api/connectors" && req.method === "POST") {
+        res.setHeader("cache-control", "no-store");
+        const body = requestObject(await readBody(req)) as Parameters<ConnectorAuthorityService["createProfile"]>[0];
+        return send(res, 201, connectors!.createProfile(body, "local-api"));
+      }
+      const connectorApiKeyMatch = path.match(/^\/api\/connectors\/([^/]+)\/api-key$/);
+      if (connectorApiKeyMatch && req.method === "POST") {
+        res.setHeader("cache-control", "no-store");
+        const body = requestObject(await readBody(req));
+        const credentialRef = connectors!.storeApiKey(
+          decodeURIComponent(connectorApiKeyMatch[1]!), typeof body.apiKey === "string" ? body.apiKey : "", "local-api",
+        );
+        return send(res, 201, { credentialRef });
+      }
+      const connectorOAuthStartMatch = path.match(/^\/api\/connectors\/([^/]+)\/oauth\/start$/);
+      if (connectorOAuthStartMatch && req.method === "POST") {
+        res.setHeader("cache-control", "no-store");
+        const body = requestObject(await readBody(req));
+        const result = connectors!.beginOAuth(
+          decodeURIComponent(connectorOAuthStartMatch[1]!),
+          typeof body.redirectUri === "string" ? body.redirectUri : "",
+          body.ttlMs === undefined ? undefined : typeof body.ttlMs === "number" ? body.ttlMs : Number.NaN,
+          "local-api",
+        );
+        return send(res, 201, result);
+      }
+      if (path === "/api/connectors/oauth/callback" && req.method === "POST") {
+        res.setHeader("cache-control", "no-store");
+        const body = requestObject(await readBody(req));
+        const credentialRef = await connectors!.completeOAuth(
+          typeof body.state === "string" ? body.state : "",
+          typeof body.code === "string" ? body.code : "",
+          "local-api", requestAbortSignal(req, res),
+        );
+        return send(res, 201, { credentialRef });
+      }
+      const connectorMatch = path.match(/^\/api\/connectors\/([^/]+)$/);
+      if (connectorMatch && req.method === "DELETE") {
+        res.setHeader("cache-control", "no-store");
+        return send(res, 200, await connectors!.revoke(
+          decodeURIComponent(connectorMatch[1]!), "local-api", requestAbortSignal(req, res),
+        ));
       }
       if (path === "/api/state") {
         if (boundary === "remote") {
@@ -1155,11 +1229,14 @@ function createGateway(
       }
       const status = err instanceof ExperienceSecurityError
         ? err.httpStatus
+        : err instanceof ConnectorAuthorityError ? err.httpStatus
         : err instanceof RequestJsonError ? 400
         : err instanceof RequestBodyTooLargeError ? 413
         : typeof err === "object" && err && "statusCode" in err ? Number(err.statusCode) : 500;
       const body = err instanceof ExperienceSecurityError
         ? { error: err.code, message: err.message }
+        : err instanceof ConnectorAuthorityError
+          ? err.upstream ?? { error: err.code, message: err.message }
         : err instanceof RequestJsonError ? { error: "invalid_json", message: err.message }
         : err instanceof RequestBodyTooLargeError ? { error: "payload_too_large", message: err.message }
         : { error: String(err) };

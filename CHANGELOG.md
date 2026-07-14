@@ -35,6 +35,12 @@
   an envelope/session/run-bound session and returns its expiry and capabilities.
 - Typed and browser SDKs expose device-session logout while preserving exact
   401/403 responses and cancellation of remote SSE readers.
+- A zero-dependency connector authority stores API keys and OAuth tokens under
+  AES-256-GCM, performs PKCE authorization and refresh/revocation lifecycle,
+  and exposes sanitized local-only management routes plus typed/browser SDKs.
+- Model relay calls may use an opaque `floyd-connector:*` reference. Core
+  resolves it server-side, binds it to the configured provider endpoint, and
+  rejects ambiguous raw-secret plus reference requests.
 
 ### Security
 
@@ -54,6 +60,16 @@
 - Remote routes deny the global Core bearer, provider relay, global state,
   global evidence, mutation/admin routes, and out-of-bound session/run/artifact
   access. Device/session revocation closes already-open remote SSE streams.
+- Connector credential values, OAuth verifiers, state values, and client
+  secrets are excluded from list responses and evidence; the remote listener
+  does not expose connector management or connector-backed provider calls.
+- OAuth callback and refresh claims are SQLite-coordinated across Core
+  instances, stale claims recover after bounded upstream deadlines, and
+  provider-issued credentials survive evidence-sink failure through a replayed
+  durable outbox.
+- Provider SSE errors are terminal and preserved as normalized `error` events;
+  response-header, idle-stream, OAuth-body, and SSE-frame limits prevent
+  dangling sockets and unbounded buffering.
 
 ### Still incomplete
 

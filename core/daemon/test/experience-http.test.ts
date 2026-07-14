@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { once } from "node:events";
+import { createServer } from "node:http";
 
 const runtimeRoot = mkdtempSync(join(tmpdir(), "floyd-experience-http-"));
 process.env.FLOYD_RUNTIME_ROOT = runtimeRoot;
@@ -239,6 +240,7 @@ test("HTTP device and one-time handoff lifecycle returns the bound envelope", as
   assert.equal((await remoteApi("/api/health", authenticatedBody.session.token)).status, 200);
   assert.equal((await remoteApi("/api/state", authenticatedBody.session.token)).status, 403);
   assert.equal((await remoteApi("/api/experience/primary", authenticatedBody.session.token)).status, 403);
+  assert.equal((await remoteApi("/api/connectors", authenticatedBody.session.token)).status, 403);
   assert.equal((await remoteApi("/gateway", authenticatedBody.session.token, { method: "POST" })).status, 401);
 
   const envelope = await (await api("/api/experience/primary")).json() as { revision: number };
@@ -348,6 +350,83 @@ test("HTTP device and one-time handoff lifecycle returns the bound envelope", as
   ]);
   assert.equal(closed, true);
   assert.equal((await remoteApi("/api/experience/primary", streamSession.session.token)).status, 403);
+});
+
+test("HTTP connector authority keeps secrets opaque and injects only endpoint-bound references", async () => {
+  let upstreamAuthorization = "";
+  const upstream = createServer(async (req, res) => {
+    upstreamAuthorization = req.headers.authorization ?? "";
+    for await (const _chunk of req) { /* drain */ }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end('{"connector":"ok"}');
+  });
+  upstream.listen(0, "127.0.0.1");
+  await once(upstream, "listening");
+  const upstreamAddress = upstream.address();
+  if (!upstreamAddress || typeof upstreamAddress === "string") throw new Error("connector upstream did not bind");
+  const apiKey = "connector-http-secret-value";
+  try {
+    const malformed = await api("/api/connectors", { method: "POST", body: "null" });
+    assert.equal(malformed.status, 400);
+    assert.equal((await malformed.json() as { error: string }).error, "invalid_input");
+
+    const created = await api("/api/connectors", {
+      method: "POST",
+      body: JSON.stringify({
+        id: "http-openai",
+        displayName: "HTTP OpenAI",
+        provider: "openai",
+        baseUrl: `http://127.0.0.1:${upstreamAddress.port}/v1`,
+      }),
+    });
+    assert.equal(created.status, 201);
+    assert.equal(created.headers.get("cache-control"), "no-store");
+    assert.doesNotMatch(await created.clone().text(), /secret/i);
+
+    const stored = await api("/api/connectors/http-openai/api-key", {
+      method: "POST",
+      body: JSON.stringify({ apiKey }),
+    });
+    assert.equal(stored.status, 201);
+    const storedBody = await stored.json() as { credentialRef: string };
+    assert.equal(storedBody.credentialRef, "floyd-connector:http-openai");
+
+    const listed = await api("/api/connectors");
+    const listedText = await listed.text();
+    assert.equal(listed.status, 200);
+    assert.equal(listed.headers.get("cache-control"), "no-store");
+    assert.doesNotMatch(listedText, new RegExp(apiKey));
+    assert.match(listedText, /floyd-connector:http-openai/);
+
+    const gateway = await fetch(`${baseUrl}/gateway`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-floyd-token": gatewayToken(),
+        "x-floyd-provider": "openai",
+        "x-floyd-credential-ref": storedBody.credentialRef,
+      },
+      body: JSON.stringify({ model: "gpt-test", messages: [{ role: "user", content: "hello" }], stream: false }),
+    });
+    assert.equal(gateway.status, 200);
+    assert.equal(await gateway.text(), '{"connector":"ok"}');
+    assert.equal(upstreamAuthorization, `Bearer ${apiKey}`);
+
+    const ambiguous = await fetch(`${baseUrl}/gateway`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-floyd-token": gatewayToken(),
+        "x-floyd-credential-ref": storedBody.credentialRef,
+        authorization: "Bearer attacker-substitute",
+      },
+      body: JSON.stringify({ model: "gpt-test", messages: [], stream: false }),
+    });
+    assert.equal(ambiguous.status, 400);
+    assert.equal((await ambiguous.json() as { error: string }).error, "credential_ambiguous");
+  } finally {
+    await new Promise<void>((resolve, reject) => upstream.close((error) => error ? reject(error) : resolve()));
+  }
 });
 
 test("a fresh session attach receives a durable transcript snapshot", async () => {

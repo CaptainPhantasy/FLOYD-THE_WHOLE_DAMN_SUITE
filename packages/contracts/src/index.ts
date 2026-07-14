@@ -159,6 +159,50 @@ export interface ProviderProfile {
   fallback_policy: "fail_closed";
 }
 
+// ---------- user-owned model connector authority ----------
+
+export type ConnectorProvider = "opencode-zen" | "opencode-go" | "openai" | "anthropic";
+export type ConnectorClientAuth = "none" | "client_secret_basic" | "client_secret_post";
+
+/** Sanitized connector metadata. Credential values never cross this contract. */
+export interface ConnectorProfile {
+  id: string;
+  displayName: string;
+  provider: ConnectorProvider;
+  dialect: "openai" | "anthropic";
+  baseUrl: string;
+  clientId: string | null;
+  clientAuth: ConnectorClientAuth;
+  authorizationUrl: string | null;
+  tokenUrl: string | null;
+  revocationUrl: string | null;
+  scopes: string[];
+  credentialRef: string | null;
+  credentialKind: "api_key" | "oauth" | null;
+  expiresAt: string | null;
+  revoked: boolean;
+}
+
+export interface ConnectorProfileInput {
+  id: string;
+  displayName: string;
+  provider: ConnectorProvider;
+  baseUrl: string;
+  clientId?: string;
+  clientSecret?: string;
+  clientAuth?: ConnectorClientAuth;
+  authorizationUrl?: string;
+  tokenUrl?: string;
+  revocationUrl?: string;
+  scopes?: string[];
+}
+
+export interface ConnectorOAuthStart {
+  authorizationUrl: string;
+  state: string;
+  expiresAt: string;
+}
+
 export interface RouteReceipt {
   provider: string;
   model: string;

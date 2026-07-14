@@ -141,3 +141,31 @@ test("model driver uses Anthropic key/version headers and preserves exact relay 
   assert.equal(seen?.headers.get("anthropic-version"), "2023-06-01");
   assert.equal(seen?.headers.get("authorization"), null);
 });
+
+test("model driver uses connector references without exposing raw provider headers", async () => {
+  let seen: Request | undefined;
+  const fetchMock: typeof fetch = async (input, init) => {
+    seen = input instanceof Request ? input : new Request(input, init);
+    return new Response('event: error\ndata: {"error":{"type":"overloaded"}}\n\n', {
+      headers: { "content-type": "text/event-stream" },
+    });
+  };
+  const client = new FloydModelClient({ token: "core-secret", fetch: fetchMock });
+  const received = [];
+  for await (const _event of client.streamChat({
+    route: { provider: "openai", credentialRef: "floyd-connector:user-openai" },
+    model: "gpt-test",
+    messages: [{ role: "user", content: "hello" }],
+  })) { received.push(_event); }
+  assert.deepEqual(received, [{ type: "error", data: { error: { type: "overloaded" } } }]);
+  assert.equal(seen?.headers.get("x-floyd-credential-ref"), "floyd-connector:user-openai");
+  assert.equal(seen?.headers.get("authorization"), null);
+  assert.equal(seen?.headers.get("x-api-key"), null);
+  await assert.rejects(async () => {
+    for await (const _event of client.streamChat({
+      route: { provider: "openai", apiKey: "raw", credentialRef: "floyd-connector:user-openai" },
+      model: "gpt-test",
+      messages: [],
+    })) { /* never reached */ }
+  }, /exactly one/);
+});

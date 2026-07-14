@@ -149,8 +149,35 @@ export class FloydBrowserClient {
     return this.request("DELETE", `/api/handoffs/${encodeURIComponent(handoffId)}`, undefined, signal);
   }
 
+  connectors(signal) {
+    return this.request("GET", "/api/connectors", undefined, signal);
+  }
+
+  createConnector(input, signal) {
+    return this.request("POST", "/api/connectors", input, signal);
+  }
+
+  storeConnectorApiKey(connectorId, apiKey, signal) {
+    return this.request("POST", `/api/connectors/${encodeURIComponent(connectorId)}/api-key`, { apiKey }, signal);
+  }
+
+  startConnectorOAuth(connectorId, redirectUri, ttlMs, signal) {
+    return this.request("POST", `/api/connectors/${encodeURIComponent(connectorId)}/oauth/start`, { redirectUri, ttlMs }, signal);
+  }
+
+  completeConnectorOAuth(state, code, signal) {
+    return this.request("POST", "/api/connectors/oauth/callback", { state, code }, signal);
+  }
+
+  revokeConnector(connectorId, signal) {
+    return this.request("DELETE", `/api/connectors/${encodeURIComponent(connectorId)}`, undefined, signal);
+  }
+
   /** Stream one user-configured provider through Core's normalized relay. */
-  async *modelStream({ provider, apiKey, baseUrl, anthropicVersion, model, messages, signal }) {
+  async *modelStream({ provider, apiKey, credentialRef, baseUrl, anthropicVersion, model, messages, signal }) {
+    if (Boolean(apiKey) === Boolean(credentialRef)) {
+      throw new Error("model route requires exactly one of apiKey or credentialRef");
+    }
     const anthropic = provider === "anthropic" || (provider === "auto" && model.toLowerCase().startsWith("claude-"));
     const response = await this.fetchImpl(`${this.baseUrl}/gateway`, {
       method: "POST",
@@ -160,7 +187,7 @@ export class FloydBrowserClient {
         "x-floyd-token": await this.token(),
         "x-floyd-provider": provider,
         ...(baseUrl ? { "x-floyd-base-url": baseUrl } : {}),
-        ...(anthropic
+        ...(credentialRef ? { "x-floyd-credential-ref": credentialRef } : anthropic
           ? { "x-api-key": apiKey, "anthropic-version": anthropicVersion || "2023-06-01" }
           : { authorization: `Bearer ${apiKey}` }),
       },
@@ -186,7 +213,7 @@ export class FloydBrowserClient {
         for (const frame of frames) {
           const type = frame.split("\n").find((line) => line.startsWith("event:"))?.slice(6).trim();
           const raw = frame.split("\n").filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trimStart()).join("\n");
-          if ((type === "delta" || type === "done") && raw) yield { type, data: JSON.parse(raw) };
+          if ((type === "delta" || type === "done" || type === "error") && raw) yield { type, data: JSON.parse(raw) };
         }
       }
     } finally {

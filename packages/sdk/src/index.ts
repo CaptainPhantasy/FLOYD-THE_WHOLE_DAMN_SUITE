@@ -15,6 +15,9 @@ import {
   type Lease,
   type Project,
   type ProviderProfile,
+  type ConnectorProfile,
+  type ConnectorProfileInput,
+  type ConnectorOAuthStart,
   type Run,
   type Session,
 } from "@floyd/contracts";
@@ -58,7 +61,10 @@ export type FloydModelProvider = "opencode-zen" | "opencode-go" | "openai" | "an
 
 export interface FloydModelRoute {
   provider: FloydModelProvider;
-  apiKey: string;
+  /** Raw provider secret for ephemeral use. Mutually exclusive with credentialRef. */
+  apiKey?: string;
+  /** Core-owned encrypted connector reference. Mutually exclusive with apiKey. */
+  credentialRef?: string;
   baseUrl?: string;
   /** Optional explicit Anthropic version; Core defaults to 2023-06-01. */
   anthropicVersion?: string;
@@ -70,8 +76,8 @@ export interface FloydChatMessage {
 }
 
 export interface FloydModelEvent {
-  type: "delta" | "done";
-  data: { text?: string; finish_reason?: string };
+  type: "delta" | "done" | "error";
+  data: { text?: string; finish_reason?: string } | unknown;
 }
 
 export class FloydApiError extends Error {
@@ -293,6 +299,30 @@ export class FloydClient {
     return this.request("DELETE", `/api/handoffs/${encodeURIComponent(handoffId)}`, undefined, signal);
   }
 
+  connectors(signal?: AbortSignal): Promise<{ connectors: ConnectorProfile[] }> {
+    return this.request("GET", "/api/connectors", undefined, signal);
+  }
+
+  createConnector(input: ConnectorProfileInput, signal?: AbortSignal): Promise<ConnectorProfile> {
+    return this.request("POST", "/api/connectors", input, signal);
+  }
+
+  storeConnectorApiKey(connectorId: string, apiKey: string, signal?: AbortSignal): Promise<{ credentialRef: string }> {
+    return this.request("POST", `/api/connectors/${encodeURIComponent(connectorId)}/api-key`, { apiKey }, signal);
+  }
+
+  startConnectorOAuth(connectorId: string, redirectUri: string, ttlMs?: number, signal?: AbortSignal): Promise<ConnectorOAuthStart> {
+    return this.request("POST", `/api/connectors/${encodeURIComponent(connectorId)}/oauth/start`, { redirectUri, ttlMs }, signal);
+  }
+
+  completeConnectorOAuth(state: string, code: string, signal?: AbortSignal): Promise<{ credentialRef: string }> {
+    return this.request("POST", "/api/connectors/oauth/callback", { state, code }, signal);
+  }
+
+  revokeConnector(connectorId: string, signal?: AbortSignal): Promise<{ connectorId: string; revoked: boolean; upstreamStatus: number | null }> {
+    return this.request("DELETE", `/api/connectors/${encodeURIComponent(connectorId)}`, undefined, signal);
+  }
+
   /**
    * Parse Core's SSE into one transport-neutral async stream.
    *
@@ -394,6 +424,9 @@ export class FloydModelClient {
     max_tokens?: number;
     signal?: AbortSignal;
   }): AsyncGenerator<FloydModelEvent> {
+    if (Boolean(input.route.apiKey) === Boolean(input.route.credentialRef)) {
+      throw new Error("model route requires exactly one of apiKey or credentialRef");
+    }
     const anthropic = input.route.provider === "anthropic"
       || (input.route.provider === "auto" && input.model.toLowerCase().startsWith("claude-"));
     const headers: Record<string, string> = {
@@ -402,12 +435,12 @@ export class FloydModelClient {
       "x-floyd-token": await this.token(),
       "x-floyd-provider": input.route.provider,
       ...(input.route.baseUrl ? { "x-floyd-base-url": input.route.baseUrl } : {}),
-      ...(anthropic
+      ...(input.route.credentialRef ? { "x-floyd-credential-ref": input.route.credentialRef } : anthropic
         ? {
-            "x-api-key": input.route.apiKey,
+            "x-api-key": input.route.apiKey!,
             "anthropic-version": input.route.anthropicVersion ?? "2023-06-01",
           }
-        : { authorization: `Bearer ${input.route.apiKey}` }),
+        : { authorization: `Bearer ${input.route.apiKey!}` }),
     };
     const response = await this.fetchImpl(`${this.baseUrl}/gateway`, {
       method: "POST",
@@ -439,11 +472,12 @@ export class FloydModelClient {
         const frames = buffer.split("\n\n");
         buffer = frames.pop() ?? "";
         for (const frame of frames) {
-          let type: "delta" | "done" | null = null;
+          let type: "delta" | "done" | "error" | null = null;
           const data: string[] = [];
           for (const line of frame.split("\n")) {
             if (line === "event: delta") type = "delta";
             else if (line === "event: done") type = "done";
+            else if (line === "event: error") type = "error";
             else if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
           }
           if (!type || data.length === 0) continue;
