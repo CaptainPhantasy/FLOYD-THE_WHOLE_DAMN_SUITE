@@ -28,28 +28,29 @@ def main():
     checks["1b Label == com.floyd.core"] = p.get("Label") == "com.floyd.core"
     checks["1c KeepAlive true"] = p.get("KeepAlive") is True
     checks["1d RunAtLoad true"] = p.get("RunAtLoad") is True
+    checks["1e Umask is private 077"] = p.get("Umask") == 0o77
 
     args = p.get("ProgramArguments", [])
     exe = args[0] if args else ""
     script = args[1] if len(args) > 1 else ""
-    checks["1e executable exists"] = bool(exe) and os.path.exists(exe)
-    checks["1f core entrypoint uses pinned release link"] = script == "/Volumes/Storage/FLOYD_RUNTIME/releases/core/current/core/daemon/src/main.ts"
-    checks["1g working directory uses pinned release link"] = p.get("WorkingDirectory") == "/Volumes/Storage/FLOYD_RUNTIME/releases/core/current"
-    checks["1h StandardOutPath set"] = bool(p.get("StandardOutPath"))
-    checks["1i StandardErrorPath set"] = bool(p.get("StandardErrorPath"))
+    checks["1f executable exists"] = bool(exe) and os.path.exists(exe)
+    checks["1g core entrypoint uses pinned release link"] = script == "/Volumes/Storage/FLOYD_RUNTIME/releases/core/current/core/daemon/src/main.ts"
+    checks["1h working directory uses pinned release link"] = p.get("WorkingDirectory") == "/Volumes/Storage/FLOYD_RUNTIME/releases/core/current"
+    checks["1i StandardOutPath set"] = bool(p.get("StandardOutPath"))
+    checks["1j StandardErrorPath set"] = bool(p.get("StandardErrorPath"))
 
     # consistency with the auth-broker pattern (same keys present), if available
     if os.path.exists(AUTH_BROKER):
         with open(AUTH_BROKER, "rb") as f:
             ab = plistlib.load(f)
         pattern_keys = {"Label", "KeepAlive", "RunAtLoad", "ProgramArguments", "StandardOutPath", "StandardErrorPath"}
-        checks["1j matches auth-broker key pattern"] = pattern_keys.issubset(p.keys()) and pattern_keys.issubset(ab.keys())
+        checks["1k matches auth-broker key pattern"] = pattern_keys.issubset(p.keys()) and pattern_keys.issubset(ab.keys())
     else:
-        checks["1j matches auth-broker key pattern"] = {"Label","KeepAlive","RunAtLoad","ProgramArguments"}.issubset(p.keys())
+        checks["1k matches auth-broker key pattern"] = {"Label","KeepAlive","RunAtLoad","ProgramArguments"}.issubset(p.keys())
 
     # plutil lint as an independent structural check
     r = subprocess.run(["/usr/bin/plutil", "-lint", PLIST], capture_output=True, text=True)
-    checks["1k plutil lint OK"] = r.returncode == 0
+    checks["1l plutil lint OK"] = r.returncode == 0
 
     print("=== OBJECTIVE 4 PLIST VALIDATION ===")
     for k, v in checks.items():

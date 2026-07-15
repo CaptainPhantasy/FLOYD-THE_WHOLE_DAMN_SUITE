@@ -6,6 +6,11 @@ import { seed } from "./seed.ts";
 import { recoverInterrupted } from "./runs.ts";
 import { startGateway, startLiveChannel, startRemoteGateway, startRemoteSurfaceGateways } from "./http.ts";
 
+// Core owns credentials, SQLite state, and managed-engine state. Keep every
+// newly created runtime file private even outside launchd (for example, a
+// foreground diagnostic start).
+process.umask(0o077);
+
 async function main(): Promise<void> {
   const startedAt = nowIso();
   verifyRuntimeRoot();

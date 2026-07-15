@@ -30,5 +30,6 @@ launchd). The auth-broker plist logs to `~/.omp` for the same reason.
 
 - [ ] Rotate the GLM key out of plaintext `~/.config/opencode/opencode.json`
       (coordinate with `coding-helper`).
-- [ ] Fix legacy state-file permissions (0644 DBs under 0755 roots) in an
-      approved maintenance window.
+- [x] Shared OpenCode config and legacy state directories/files are private
+      (`0700` directories, `0600` config/DB/WAL/SHM); Floyd launchd and Core
+      both enforce umask `077` for future runtime files.
