@@ -128,7 +128,9 @@ test("remote cockpit is continuation-only and disables local authority controls"
   assert.match(html, /\[401, 403\]\.includes\(error\.status\)/);
   assert.match(html, /await confirmRemoteDeviceSession\(\)/);
   assert.match(html, /history\.replaceState/);
-  assert.match(html, /sessionStorage\.removeItem\("floyd_gateway_token"\)/);
+  assert.match(html, /establishLocalBrowserSession/);
+  assert.match(html, /"\/api\/local-session"/);
+  assert.doesNotMatch(html, /(sessionStorage|localStorage)\.(getItem|setItem|removeItem)\([^\n]*floyd_gateway_token/);
 });
 
 test("cockpit renders a local QR handoff without emoji or external image services", () => {

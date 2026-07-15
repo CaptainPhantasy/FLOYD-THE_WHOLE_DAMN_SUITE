@@ -400,6 +400,18 @@ browser-control paths share a closed transport; prior five-surface and physical
 MacBook rendered receipts remain valid, but they do not substitute for a fresh
 render of this connected-app selection change.
 
+## Stale issue intake completion — 2026-07-15
+
+- [x] Reconcile Node, surface, mobile provenance, and launchd claims against
+  current runtime evidence.
+- [x] Add a repeatable health-gated Core LaunchAgent provisioner.
+- [x] Replace JavaScript-readable Cockpit token persistence with a bounded,
+  revocable HttpOnly loopback session and same-origin mutation enforcement.
+- [x] Run TypeScript project references, all 153 tests, active-surface runtime
+  verification, plist validation, and live local-session black-box checks.
+- [x] Move the five stale intake rows to evidence-backed resolved status while
+  preserving the unrecoverable mobile-history boundary and manual reboot gate.
+
 ## Plan Maintenance
 
 - Re-read this file before implementation and cutover decisions.

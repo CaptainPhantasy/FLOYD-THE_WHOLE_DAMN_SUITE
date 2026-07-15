@@ -246,12 +246,8 @@ import { FloydBrowserClient, FloydApiError } from "/floyd-sdk.js";
 const query = new URLSearchParams(location.search);
 const remoteMode = !["localhost", "127.0.0.1", "::1", ""].includes(location.hostname);
 const bootstrap = new URLSearchParams(location.hash.replace(/^#/, ""));
-const bootstrapToken = bootstrap.get("token");
+let bootstrapToken = bootstrap.get("token");
 const handoffToken = bootstrap.get("handoff");
-if (bootstrapToken && !remoteMode) {
-  sessionStorage.setItem("floyd_gateway_token", bootstrapToken);
-}
-if (remoteMode) sessionStorage.removeItem("floyd_gateway_token");
 if (bootstrapToken || handoffToken) history.replaceState({}, "", `${location.pathname}${location.search}`);
 const hadOAuthCallbackParams = query.has("state") || query.has("code");
 let capturedOAuthCallback = null;
@@ -264,8 +260,14 @@ finally {
     history.replaceState({}, "", `${location.pathname}?${query.toString()}`);
   }
 }
-const token = () => sessionStorage.getItem("floyd_gateway_token") || "";
+const token = () => bootstrapToken || "";
 const client = new FloydBrowserClient({ token });
+
+async function establishLocalBrowserSession() {
+  if (remoteMode || !bootstrapToken) return;
+  await client.request("POST", "/api/local-session");
+  bootstrapToken = null;
+}
 const actor = "douglas-cockpit";
 const surfaceId = "cockpit";
 const envelopeId = "primary";
@@ -1597,7 +1599,7 @@ function bestEffortRevokeActiveHandoff(fetchImpl = globalThis.fetch.bind(globalT
   app.activeHandoffLink = null;
   const request = fetchImpl(`/api/handoffs/${encodeURIComponent(id)}`, {
     method: "DELETE",
-    headers: { authorization: `Bearer ${token()}` },
+    headers: token() ? { authorization: `Bearer ${token()}` } : {},
     credentials: "same-origin",
     keepalive: true,
   });
@@ -1743,10 +1745,14 @@ if (remoteMode && handoffToken) {
   }
   catch (error) { notify(error); }
 }
+if (!remoteMode && bootstrapToken) {
+  try { await establishLocalBrowserSession(); }
+  catch (error) { notify(error); }
+}
 await refreshHealth();
 await refreshState();
 app.experienceReady = initializeExperience();
-try { await app.experienceReady; } catch (error) { if (token()) notify(error); }
+try { await app.experienceReady; } catch (error) { if (!remoteMode || token()) notify(error); }
 try { await completeOAuthCallback(); } catch (error) { notify(error); }
 if (query.get("settings") === "model") openModelSettings().catch(notify);
 if (query.get("settings") === "connections") {

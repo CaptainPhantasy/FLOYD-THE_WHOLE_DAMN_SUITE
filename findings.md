@@ -544,3 +544,24 @@ External research sources reviewed as data:
 - GLM Coding Plan live catalog: glm-4.7, glm-5.1, glm-5.2, glm-5v-turbo, glm-5-turbo, glm-4.5-air. **glm-4.6 no longer exists** — blueprint and Douglas's global opencode config both stale on this.
 - `omp auth-broker token zai` → HTTP 401 at api.z.ai coding endpoint; user's config key → HTTP 200. Core validates broker-first, falls back with evidence, fails closed otherwise.
 - Session recovery contract implemented: reattach + observe if an assistant turn exists; set model + re-prompt (evidenced) when the action never started.
+
+## Stale issue intake findings — 2026-07-15
+
+- Four of five issue rows described superseded state: Node is `v26.5.0`, the
+  five active surfaces are admitted and live, the clean The_Burner remote copy
+  exists at `f1da3eb9a43a96a6612c2ac6d760e42db99befd4`, and
+  `com.floyd.core` is provisioned and healthy. ADK/mobile were deliberately
+  removed from active admission scope and remain untouched intake evidence.
+- The remaining defect was real: local Cockpit stored the long-lived gateway
+  bearer in `sessionStorage` and sent it from JavaScript on every request.
+- Root cause: remote browsers already exchanged grants for an HttpOnly device
+  session, but the local boundary had no session abstraction and accepted only
+  the raw gateway bearer.
+- Fix: local Core now exchanges the fragment bootstrap for a random eight-hour
+  cookie, retains only its SHA-256 digest in a bounded in-memory store, rejects
+  non-loopback Host values, enforces exact-Origin cookie mutations, and exposes
+  explicit revocation. The browser SDK omits empty Core-auth headers so the
+  HttpOnly cookie remains authoritative, including provider streaming.
+- Verification: Node 26 typecheck exit 0; 153/153 tests; active-surface runtime
+  PASS; plist 10/10; live session exchange/state/CSRF/Host/revoke sequence
+  `201/200/403/421/200/401`.

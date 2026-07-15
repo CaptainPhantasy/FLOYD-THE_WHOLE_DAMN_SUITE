@@ -38,6 +38,7 @@ export class FloydBrowserClient {
     const token = await this.token();
     const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
       method,
+      credentials: "same-origin",
       headers: {
         ...(token ? { authorization: `Bearer ${token}` } : {}),
         ...(body !== undefined ? { "content-type": "application/json" } : {}),
@@ -217,12 +218,14 @@ export class FloydBrowserClient {
       throw new Error("model route requires exactly one of apiKey or credentialRef");
     }
     const anthropic = provider === "anthropic" || (provider === "auto" && model.toLowerCase().startsWith("claude-"));
+    const coreToken = await this.token();
     const response = await this.fetchImpl(`${this.baseUrl}/gateway`, {
       method: "POST",
+      credentials: "same-origin",
       headers: {
         "content-type": "application/json",
         accept: "text/event-stream",
-        "x-floyd-token": await this.token(),
+        ...(coreToken ? { "x-floyd-token": coreToken } : {}),
         "x-floyd-provider": provider,
         ...(baseUrl ? { "x-floyd-base-url": baseUrl } : {}),
         ...(credentialRef ? { "x-floyd-credential-ref": credentialRef } : anthropic
@@ -272,6 +275,7 @@ export class FloydBrowserClient {
     const token = await this.token();
     const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
       method,
+      credentials: "same-origin",
       headers: {
         ...(token ? { authorization: `Bearer ${token}` } : {}),
         accept: "text/event-stream",

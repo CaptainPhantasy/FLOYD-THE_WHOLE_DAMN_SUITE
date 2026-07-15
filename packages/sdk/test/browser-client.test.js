@@ -51,6 +51,26 @@ test("browser client omits an empty bearer header so HttpOnly device cookies rem
   });
   assert.deepEqual(await client.health(), { ok: true });
   assert.equal(seen.headers.has("authorization"), false);
+  assert.equal(seen.credentials, "same-origin");
+});
+
+test("browser model stream omits an empty Core token so an HttpOnly local session remains authoritative", async () => {
+  let seen;
+  const client = new FloydBrowserClient({
+    baseUrl: "http://127.0.0.1:41414",
+    token: () => "",
+    fetch: async (input, init) => {
+      seen = input instanceof Request ? input : new Request(input, init);
+      return new Response('event: done\ndata: {"ok":true}\n\n', { headers: { "content-type": "text/event-stream" } });
+    },
+  });
+  const events = [];
+  for await (const event of client.modelStream({
+    provider: "openai", apiKey: "provider-secret", model: "gpt-test", messages: [],
+  })) events.push(event);
+  assert.equal(seen.headers.has("x-floyd-token"), false);
+  assert.equal(seen.credentials, "same-origin");
+  assert.deepEqual(events, [{ type: "done", data: { ok: true } }]);
 });
 
 test("browser model stream rejects EOF without an explicit terminal event", async () => {

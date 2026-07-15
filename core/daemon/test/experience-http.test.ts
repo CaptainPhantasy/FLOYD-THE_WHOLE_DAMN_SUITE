@@ -246,6 +246,57 @@ test("Cockpit and browser SDK cannot be reused from a stale browser cache after 
   }
 });
 
+test("local Cockpit exchanges its bootstrap token for a revocable HttpOnly loopback session", async () => {
+  const missingOrigin = await fetch(`${baseUrl}/api/local-session`, {
+    method: "POST",
+    headers: authorization,
+  });
+  assert.equal(missingOrigin.status, 403);
+
+  const hostileOrigin = await fetch(`${baseUrl}/api/local-session`, {
+    method: "POST",
+    headers: { ...authorization, origin: "https://attacker.example" },
+  });
+  assert.equal(hostileOrigin.status, 403);
+
+  const bootstrapped = await fetch(`${baseUrl}/api/local-session`, {
+    method: "POST",
+    headers: { ...authorization, origin: baseUrl, "sec-fetch-site": "same-origin" },
+  });
+  assert.equal(bootstrapped.status, 201);
+  assert.match(bootstrapped.headers.get("cache-control") ?? "", /no-store/);
+  const bodyText = await bootstrapped.text();
+  assert.doesNotMatch(bodyText, /token|secret|credential/i);
+  const cookie = (bootstrapped.headers.get("set-cookie") ?? "").split(";")[0]!;
+  assert.match(cookie, /^floyd_local_session=/);
+  assert.match(bootstrapped.headers.get("set-cookie") ?? "", /HttpOnly/);
+  assert.match(bootstrapped.headers.get("set-cookie") ?? "", /SameSite=Strict/);
+
+  const state = await fetch(`${baseUrl}/api/state`, { headers: { cookie } });
+  assert.equal(state.status, 200);
+  await state.body?.cancel();
+
+  const csrf = await fetch(`${baseUrl}/api/handoffs/nonexistent`, {
+    method: "DELETE",
+    headers: { cookie, origin: "https://attacker.example" },
+  });
+  assert.equal(csrf.status, 403);
+  const mutation = await fetch(`${baseUrl}/api/handoffs/nonexistent`, {
+    method: "DELETE",
+    headers: { cookie, origin: baseUrl, "sec-fetch-site": "same-origin" },
+  });
+  assert.equal(mutation.status, 404);
+
+  const revoked = await fetch(`${baseUrl}/api/local-session`, {
+    method: "DELETE",
+    headers: { cookie, origin: baseUrl, "sec-fetch-site": "same-origin" },
+  });
+  assert.equal(revoked.status, 200);
+  assert.match(revoked.headers.get("set-cookie") ?? "", /Max-Age=0/);
+  const afterRevoke = await fetch(`${baseUrl}/api/state`, { headers: { cookie } });
+  assert.equal(afterRevoke.status, 401);
+});
+
 test("HTTP experience integration negotiates, streams, updates, and preserves conflicts", async () => {
   const queryAuth = await fetch(`${baseUrl}/api/health?token=${encodeURIComponent(gatewayToken())}`);
   assert.equal(queryAuth.status, 401);
@@ -1040,7 +1091,14 @@ test("a fresh session attach receives a durable transcript snapshot", async () =
     headers: { accept: "text/event-stream" },
   });
   const contextStreamReader = contextStreamResponse.body!.getReader();
-  assert.equal((await contextStreamReader.read()).done, false);
+  let initialContextStream = "";
+  for (let reads = 0; reads < 4 && !initialContextStream.includes("event: experience"); reads += 1) {
+    const chunk = await contextStreamReader.read();
+    assert.equal(chunk.done, false);
+    initialContextStream += new TextDecoder().decode(chunk.value);
+  }
+  assert.match(initialContextStream, /event: hello/);
+  assert.match(initialContextStream, /event: experience/);
   const beforeMove = await (await api("/api/experience/primary")).json() as { revision: number };
   const remoteBeforeMove = await (await remoteApi("/api/experience/primary", readerSession.session.token)).json() as { revision: number };
   const remoteClear = await remoteApi("/api/experience/primary", readerSession.session.token, {

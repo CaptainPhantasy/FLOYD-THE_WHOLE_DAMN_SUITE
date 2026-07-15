@@ -465,3 +465,20 @@ scope reduction or a deferral of the connected-application experience.
 - Fresh rendered reinspection is blocked: both the computer-use and Chrome
   control paths failed at their shared closed browser transport. No headless or
   source-only result is being represented as visual proof.
+
+## Stale issue intake repair — 2026-07-15
+
+- Re-audited all five entries in `Issues/FLOYD_WORKSTATION_ISSUES.md` against
+  the live host and current repository instead of preserving stale status text.
+- Confirmed Node `v26.5.0`; `pnpm typecheck` exited 0 and `pnpm test` passed
+  153/153. `pnpm verify:surfaces` reported `ACTIVE_SURFACES PASS` with clean,
+  commit-pinned copies and live provenance-bound listeners for the five active
+  surfaces. ADK and The_Burner remain clean, untouched intake-only copies.
+- Added `scripts/install-core-launch-agent.sh` and `pnpm core:install`. The
+  health-gated reload installed the byte-identical `0600` plist and returned
+  `CORE_LAUNCH_AGENT PASS`; Core PID 10908 owns managed OpenCode PID 10929.
+- Replaced local Cockpit web-storage bearer persistence with an eight-hour
+  in-memory HttpOnly loopback session. Live black-box proof returned bootstrap
+  201, cookie-authenticated state 200, hostile Origin 403, hostile Host 421,
+  revoke 200, and post-revoke state 401. Cookie values were redacted from
+  evidence output.

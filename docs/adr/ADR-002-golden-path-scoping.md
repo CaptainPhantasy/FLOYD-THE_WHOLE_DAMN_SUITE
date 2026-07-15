@@ -31,3 +31,12 @@ Accepted.
 5. **Gateway auth.** Loopback bind plus a generated 0600 bearer token under
    `FLOYD_RUNTIME/core/gateway.token`. Not a provider key. Device-scoped tokens
    arrive with the remote/mobile phase.
+
+### 2026-07-15 authentication addendum
+
+The bearer remains the native/server-side credential. The local Cockpit now
+exchanges its fragment bootstrap for a bounded, in-memory, digest-at-rest
+HttpOnly loopback session and removes the JavaScript-readable credential.
+Cookie mutations require the exact loopback Origin and same-origin fetch
+context; non-loopback Host headers fail closed. This supersedes any earlier
+Cockpit guidance that retained the gateway token in `sessionStorage`.

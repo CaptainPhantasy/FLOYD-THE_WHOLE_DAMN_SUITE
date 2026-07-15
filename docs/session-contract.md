@@ -7,9 +7,20 @@ built against this document alone; no additional gateway changes are required.
 
 - Base URL: `http://127.0.0.1:41414` (loopback; remote surfaces arrive via
   private overlay in a later phase — same contract).
-- Every request carries `Authorization: Bearer <gateway token>`
-  (`FLOYD_RUNTIME/core/gateway.token`, 0600). SSE clients must use the Floyd
-  SDK, which sends the same header; API query-token authentication is forbidden.
+- Native and server-side clients carry `Authorization: Bearer <gateway token>`
+  (`FLOYD_RUNTIME/core/gateway.token`, 0600). API query-token authentication is
+  forbidden.
+- The local Cockpit never persists that gateway token in browser storage. A
+  `#token=...` fragment may bootstrap the page once; the page removes the
+  fragment from the visible URL before network activity, exchanges the bearer
+  through `POST /api/local-session`, then erases its JavaScript reference.
+  Core returns only an eight-hour, random HttpOnly `SameSite=Strict` loopback
+  session cookie, stores only its SHA-256 digest in memory, rejects non-loopback
+  Host headers, and requires the exact loopback Origin for cookie-authenticated
+  mutations. Core restart or `DELETE /api/local-session` revokes the session.
+  Never put the fragment bootstrap in a process command line.
+- Private remote browsers use the separate scoped device-session HttpOnly
+  cookie and never receive the workstation gateway token.
 - Session IDs are Floyd session IDs (`ses_…`) from `GET /api/state`. One Floyd
   session is the project continuity container. Active conversation streams,
   transcript cursors, steering, questions, and permissions are additionally

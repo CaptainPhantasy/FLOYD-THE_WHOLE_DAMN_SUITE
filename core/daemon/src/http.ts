@@ -1,5 +1,5 @@
 import { createServer, request as requestHttp, type IncomingHttpHeaders, type IncomingMessage, type ServerResponse } from "node:http";
-import { randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { readFileSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -644,6 +644,42 @@ function requestAbortSignal(req: IncomingMessage, res: ServerResponse): AbortSig
 }
 
 const DEVICE_SESSION_COOKIE = "__Host-floyd_session";
+const LOCAL_SESSION_COOKIE = "floyd_local_session";
+const LOCAL_SESSION_TTL_MS = 8 * 60 * 60 * 1000;
+
+type LocalSessionStore = Map<string, number>;
+
+function localSessionDigest(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
+}
+
+function issueLocalSession(store: LocalSessionStore): { token: string; expiresAt: number } {
+  const now = Date.now();
+  for (const [digest, expiresAt] of store) {
+    if (expiresAt <= now) store.delete(digest);
+  }
+  if (store.size >= 256) throw new Error("local session capacity exceeded");
+  const token = randomBytes(32).toString("base64url");
+  const expiresAt = now + LOCAL_SESSION_TTL_MS;
+  store.set(localSessionDigest(token), expiresAt);
+  return { token, expiresAt };
+}
+
+function authenticateLocalSession(store: LocalSessionStore, token: string): boolean {
+  if (!token) return false;
+  const digest = localSessionDigest(token);
+  const expiresAt = store.get(digest);
+  if (!expiresAt) return false;
+  if (expiresAt <= Date.now()) {
+    store.delete(digest);
+    return false;
+  }
+  return true;
+}
+
+function revokeLocalSession(store: LocalSessionStore, token: string): void {
+  if (token) store.delete(localSessionDigest(token));
+}
 
 function cookieValue(req: IncomingMessage, name: string): string {
   for (const part of (req.headers.cookie ?? "").split(";")) {
@@ -668,6 +704,35 @@ function setDeviceSessionCookie(res: ServerResponse, token: string, expiresAt: s
 
 function clearDeviceSessionCookie(res: ServerResponse): void {
   res.setHeader("set-cookie", `${DEVICE_SESSION_COOKIE}=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Strict`);
+}
+
+function setLocalSessionCookie(res: ServerResponse, token: string, expiresAt: number): void {
+  const maxAge = Math.max(0, Math.floor((expiresAt - Date.now()) / 1000));
+  // Core's local listener is plain HTTP by design, so Secure would make this
+  // cookie unusable on 127.0.0.1. The listener is loopback-only and every
+  // cookie-authenticated mutation is additionally origin-checked below.
+  res.setHeader("set-cookie", `${LOCAL_SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; Max-Age=${maxAge}; HttpOnly; SameSite=Strict`);
+}
+
+function clearLocalSessionCookie(res: ServerResponse): void {
+  res.setHeader("set-cookie", `${LOCAL_SESSION_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict`);
+}
+
+function localRequestOrigin(req: IncomingMessage): string | null {
+  const host = req.headers.host;
+  if (!host) return null;
+  try {
+    const origin = new URL(`http://${host}`);
+    return ["localhost", "127.0.0.1", "[::1]"].includes(origin.hostname) ? origin.origin : null;
+  } catch {
+    return null;
+  }
+}
+
+function isSameOriginBrowserRequest(req: IncomingMessage, expectedOrigin: string | null): boolean {
+  if (!expectedOrigin || req.headers.origin !== expectedOrigin) return false;
+  const fetchSite = req.headers["sec-fetch-site"];
+  return !fetchSite || fetchSite === "same-origin";
 }
 
 function remoteRouteScope(method: string | undefined, path: string): ExperienceDeviceSessionScope | null | undefined {
@@ -809,6 +874,7 @@ function createGateway(
   dependencies: GatewayDependencies = {},
 ): ReturnType<typeof createServer> {
   const token = gatewayToken();
+  const localSessions: LocalSessionStore = new Map();
   const selfAuthAttempts = new Map<string, { windowStarted: number; count: number }>();
   const experienceSecurity = new ExperienceSecurityService(db, {
     masterKeyPath: PATHS.experienceMasterKey,
@@ -828,6 +894,10 @@ function createGateway(
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", `http://${LOOPBACK}:${CORE_PORT}`);
     const path = url.pathname;
+    const expectedLocalOrigin = boundary === "local" ? localRequestOrigin(req) : null;
+    if (boundary === "local" && !expectedLocalOrigin) {
+      return send(res, 421, { error: "local Core requires a loopback Host" });
+    }
     if (boundary === "remote") {
       res.setHeader("referrer-policy", "no-referrer");
       res.setHeader("x-content-type-options", "nosniff");
@@ -862,13 +932,16 @@ function createGateway(
       : req.headers["x-floyd-token"];
     const bearerAuth = req.headers.authorization?.replace(/^Bearer\s+/i, "") ?? "";
     const deviceCookie = boundary === "remote" ? cookieValue(req, DEVICE_SESSION_COOKIE) : "";
+    const localCookie = boundary === "local" ? cookieValue(req, LOCAL_SESSION_COOKIE) : "";
+    const localSessionAuthenticated = boundary === "local" && authenticateLocalSession(localSessions, localCookie);
     const auth = isProviderGateway
-      ? gatewayAuth ?? ""
-      : bearerAuth || deviceCookie;
+      ? gatewayAuth || localCookie
+      : bearerAuth || deviceCookie || localCookie;
     const isStatic = !path.startsWith("/api/") && !isProviderGateway;
+    const localSessionBootstrap = boundary === "local" && path === "/api/local-session" && req.method === "POST";
     const connectedAppOAuthCallback = boundary === "local" && req.method === "GET"
       && path === "/api/connected-apps/oauth/callback";
-    const selfAuthenticating = connectedAppOAuthCallback || (req.method === "POST"
+    const selfAuthenticating = connectedAppOAuthCallback || localSessionBootstrap || (req.method === "POST"
       && (path === "/api/devices/authenticate" || path === "/api/handoffs/consume" || path === "/api/handoffs/pair"));
     if (selfAuthenticating) {
       if (path === "/api/handoffs/pair" && boundary === "remote" && !req.headers.origin) {
@@ -900,13 +973,19 @@ function createGateway(
         ? { windowStarted: now, count: 1 }
         : { ...prior, count: prior.count + 1 };
       selfAuthAttempts.set(key, attempt);
-      const limit = path === "/api/devices/authenticate" ? 8 : path === "/api/handoffs/pair" ? 10 : 30;
+      const limit = path === "/api/devices/authenticate" || path === "/api/local-session" ? 8 : path === "/api/handoffs/pair" ? 10 : 30;
       if (attempt.count > limit) return send(res, 429, { error: "self-authentication rate limit exceeded" });
     }
     let remotePrincipal: RemotePrincipal | null = null;
     if (boundary === "local") {
-      if (!isStatic && !selfAuthenticating && auth !== token) {
+      const gatewayAuthenticated = isProviderGateway ? gatewayAuth === token : bearerAuth === token;
+      if (!isStatic && !selfAuthenticating && !gatewayAuthenticated && !localSessionAuthenticated) {
         return send(res, 401, { error: "unauthorized: missing/invalid gateway token" });
+      }
+      if (!isStatic && !selfAuthenticating && !gatewayAuthenticated && localSessionAuthenticated
+        && !["GET", "HEAD", "OPTIONS"].includes(req.method ?? "")
+        && !isSameOriginBrowserRequest(req, expectedLocalOrigin)) {
+        return send(res, 403, { error: "cookie-authenticated mutation requires the exact loopback Origin" });
       }
     } else if (!isStatic && !selfAuthenticating) {
       if (isProviderGateway || gatewayAuth || !auth || auth === token) {
@@ -931,6 +1010,24 @@ function createGateway(
     }
 
     try {
+      if (localSessionBootstrap) {
+        res.setHeader("cache-control", "no-store");
+        if (!isSameOriginBrowserRequest(req, expectedLocalOrigin)) {
+          return send(res, 403, { error: "local session bootstrap requires the exact loopback Origin" });
+        }
+        if (bearerAuth !== token) return send(res, 401, { error: "invalid local session bootstrap" });
+        let session;
+        try { session = issueLocalSession(localSessions); }
+        catch { return send(res, 503, { error: "local session capacity exceeded" }); }
+        setLocalSessionCookie(res, session.token, session.expiresAt);
+        return send(res, 201, { expires_at: new Date(session.expiresAt).toISOString() });
+      }
+      if (boundary === "local" && path === "/api/local-session" && req.method === "DELETE") {
+        revokeLocalSession(localSessions, localCookie);
+        clearLocalSessionCookie(res);
+        res.setHeader("cache-control", "no-store");
+        return send(res, 200, { revoked: true });
+      }
       if (connectedAppOAuthCallback) {
         res.setHeader("cache-control", "no-store");
         res.setHeader("referrer-policy", "no-referrer");
