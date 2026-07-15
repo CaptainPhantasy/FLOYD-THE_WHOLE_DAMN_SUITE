@@ -412,6 +412,26 @@ render of this connected-app selection change.
 - [x] Move the five stale intake rows to evidence-backed resolved status while
   preserving the unrecoverable mobile-history boundary and manual reboot gate.
 
+## Daily-driver hardening — 2026-07-15
+
+- [x] Preserve the repaired browser-auth and autostart baseline on
+  `fix/floyd-daily-driver-hardening`.
+- [x] Deploy Core from a clean, commit-addressed runtime release instead of the
+  editable Git checkout; require authenticated health to report the exact
+  deployed commit and roll back a failed switch.
+- [x] Fix the macOS destination-symlink swap edge and prove the live Core cwd is
+  the immutable release directory with no links back into the working tree.
+- [x] Restrict shared OpenCode config/state and Floyd DB/WAL/SHM permissions;
+  enforce umask `077` in launchd and foreground Core starts.
+- [x] Re-run launchd validation, active-surface verification, TypeScript project
+  references, and all 154 tests against the deployed baseline.
+- [ ] **MANUAL:** reboot/login survival proof remains an operator action.
+- [ ] **BLOCKED:** fresh rendered walkthrough; the required browser-control
+  inventory was empty on 2026-07-15. Prior render receipts are not being
+  represented as current proof.
+- [ ] **EXTERNAL AUTHORITY:** rotate the five provider/MCP credential values
+  still present in the now-private shared OpenCode config.
+
 ## Plan Maintenance
 
 - Re-read this file before implementation and cutover decisions.

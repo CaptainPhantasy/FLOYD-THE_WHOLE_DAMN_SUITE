@@ -482,3 +482,29 @@ scope reduction or a deferral of the connected-application experience.
   201, cookie-authenticated state 200, hostile Origin 403, hostile Host 421,
   revoke 200, and post-revoke state 401. Cookie values were redacted from
   evidence output.
+
+## Daily-driver hardening — 2026-07-15
+
+- Committed the existing repair baseline as `a911f30`, then added a clean-tree,
+  commit-addressed Core release builder with external dependency vendoring,
+  live-source symlink rejection, import smoke proof, authenticated provenance
+  health, and rollback (`aa797b3`).
+- The first upgrade attempt exposed a macOS `mv` edge: without `-h`, replacing
+  a symlink to a directory deposited the new link inside the old release. The
+  health gate rejected the stale reported commit and restored the prior plist.
+  Commit `b7caf23` uses the independently proven `mv -fh` swap for rollout and
+  rollback; the live switch then returned `CORE_RELEASE PASS`.
+- Live Core PID 40784 and managed OpenCode PID 40948 reported HTTP 200 from
+  release `b7caf23f6410b26f5f8b60e038c2ede15cf13570`; `lsof` confirmed Core's
+  cwd is that exact release directory, and a full symlink scan found no path
+  back to the working checkout.
+- Shared OpenCode config is now `0600` under a `0700` directory. Its legacy
+  state directory is `0700`; global and Floyd DB/WAL/SHM files are `0600`.
+  launchd and Core enforce umask `077`. Five credential fields still require
+  provider-side rotation; no values were printed or changed.
+- Final machine proof: launchd plist 12/12 PASS, `ACTIVE_SURFACES PASS`,
+  TypeScript project references exit 0, 154/154 tests pass, `git diff --check`
+  exit 0, and the worktree is clean.
+- Fresh rendered proof remains blocked because the browser-control inventory
+  returned `[]`. No headless result substitutes for that missing visual gate.
+  Reboot/login survival also remains a manual operator receipt.

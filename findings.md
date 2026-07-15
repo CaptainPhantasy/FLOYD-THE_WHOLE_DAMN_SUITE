@@ -565,3 +565,23 @@ External research sources reviewed as data:
 - Verification: Node 26 typecheck exit 0; 153/153 tests; active-surface runtime
   PASS; plist 10/10; live session exchange/state/CSRF/Host/revoke sequence
   `201/200/403/421/200/401`.
+
+## Daily-driver hardening findings — 2026-07-15
+
+- A repeatable LaunchAgent was not sufficient isolation while its entrypoint
+  remained under `FLOYD_WORKSTATION`: any branch switch or live edit could
+  change the persistent service. Core now runs from a clean, commit-addressed
+  release under `FLOYD_RUNTIME/releases/core` and reports release provenance in
+  authenticated health.
+- The rollout health gate caught a real macOS filesystem edge. `mv -f` follows
+  a destination symlink to a directory; `mv -fh` atomically replaces it. The
+  failed attempt restored the known-good release, and the corrected deployment
+  advanced to `b7caf23f6410b26f5f8b60e038c2ede15cf13570`.
+- The shared OpenCode config contained five nonempty credential fields and was
+  mode `0644` under a `0755` directory. Local exposure is closed with `0600` /
+  `0700`, but credential rotation remains distinct external work. Floyd and
+  legacy SQLite state files are now private, with umask `077` preventing
+  permissive recreation.
+- Automated and live readiness are green; physical reboot survival and a fresh
+  rendered walkthrough are not. The browser-control inventory was empty, so
+  prior visual receipts remain historical evidence only.
