@@ -237,6 +237,22 @@ test("Core surface discovery probes only fixed admitted URLs and fails closed on
   mismatchedSurfaceId = null;
 });
 
+test("Core health identifies whether it is running from a pinned release", async () => {
+  const response = await api("/api/health");
+  assert.equal(response.status, 200);
+  const body = await response.json() as {
+    ok: boolean;
+    release: { source: string; source_commit: string | null; node_version: string };
+  };
+  assert.equal(body.ok, true);
+  assert.deepEqual(body.release, {
+    source: "working-tree",
+    source_commit: null,
+    built_at: null,
+    node_version: process.version,
+  });
+});
+
 test("Cockpit and browser SDK cannot be reused from a stale browser cache after Core restart", async () => {
   for (const path of ["/", "/floyd-sdk.js"]) {
     const response = await fetch(`${baseUrl}${path}`);

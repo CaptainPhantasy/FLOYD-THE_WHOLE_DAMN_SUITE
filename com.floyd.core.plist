@@ -7,10 +7,10 @@
   <key>ProgramArguments</key>
   <array>
     <string>/opt/homebrew/bin/node</string>
-    <string>/Volumes/Storage/FLOYD_WORKSTATION/core/daemon/src/main.ts</string>
+        <string>/Volumes/Storage/FLOYD_RUNTIME/releases/core/current/core/daemon/src/main.ts</string>
   </array>
   <key>WorkingDirectory</key>
-  <string>/Volumes/Storage/FLOYD_WORKSTATION</string>
+    <string>/Volumes/Storage/FLOYD_RUNTIME/releases/core/current</string>
   <key>EnvironmentVariables</key>
   <dict>
     <key>HOME</key>

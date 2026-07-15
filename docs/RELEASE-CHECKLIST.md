@@ -6,8 +6,10 @@ Items that cannot run in CI and must be recorded by an operator before release.
 
 - [x] `com.floyd.core.plist` validated in CI (`tests/acceptance/launchd_plist_test.py` → RESULT: PASS, 10/10).
 - [x] Repeatable install/reload is provided by `pnpm core:install`; it installs
-      the checked-in plist with mode `0600`, reloads the user LaunchAgent, and
-      waits for authenticated Core health before returning success.
+      a clean, commit-addressed release under `FLOYD_RUNTIME/releases/core`,
+      installs the checked-in plist with mode `0600`, reloads the user
+      LaunchAgent, and requires authenticated health to report that exact
+      source commit. A failed rollout restores the prior plist and release link.
 - [x] Loaded via `launchctl bootstrap gui/$UID`; `launchctl list` shows running (pid 85295, exit 0), state = running, never exited.
 - [x] CLI-submitted run executed against the launchd Core with exactly one Core process (before=1, after=1); CLI attached, did not spawn.
 - [ ] **MANUAL (operator, requires reboot):** Reboot the machine. After login, run

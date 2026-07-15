@@ -53,6 +53,32 @@ const COCKPIT_DIR = join(ROOT_DIR, "apps", "cockpit", "public");
 const BROWSER_SDK = join(ROOT_DIR, "packages", "sdk", "browser", "floyd-sdk.js");
 const SURFACE_MANIFEST = join(ROOT_DIR, "ecosystem", "surfaces.json");
 
+type ReleaseIdentity = {
+  source: "runtime-release" | "working-tree";
+  source_commit: string | null;
+  built_at: string | null;
+  node_version: string;
+};
+
+function readReleaseIdentity(): ReleaseIdentity {
+  try {
+    const parsed = JSON.parse(readFileSync(join(ROOT_DIR, "release.json"), "utf8")) as Record<string, unknown>;
+    if (typeof parsed.source_commit !== "string" || !/^[a-f0-9]{40}$/.test(parsed.source_commit)) {
+      throw new Error("invalid release source commit");
+    }
+    return {
+      source: "runtime-release",
+      source_commit: parsed.source_commit,
+      built_at: typeof parsed.built_at === "string" ? parsed.built_at : null,
+      node_version: typeof parsed.node_version === "string" ? parsed.node_version : process.version,
+    };
+  } catch {
+    return { source: "working-tree", source_commit: null, built_at: null, node_version: process.version };
+  }
+}
+
+const RELEASE_IDENTITY = Object.freeze(readReleaseIdentity());
+
 function admittedSurfaceCommit(id: string): string {
   const manifest = JSON.parse(readFileSync(SURFACE_MANIFEST, "utf8")) as {
     surfaces?: Array<{ id?: unknown; integration?: { commit?: unknown } }>;
@@ -1068,6 +1094,7 @@ function createGateway(
             service: "floyd-core",
             version: "0.1.0",
             now: nowIso(),
+            release: RELEASE_IDENTITY,
             engine: { ok: await engine.isHealthy() },
           });
         }
@@ -1078,6 +1105,7 @@ function createGateway(
           pid: corePid,
           started_at: startedAt,
           now: nowIso(),
+          release: RELEASE_IDENTITY,
           engine: { ok: await engine.isHealthy(), url: engine.baseUrl, pid: engine.child?.pid ?? null },
         });
       }

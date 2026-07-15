@@ -33,22 +33,23 @@ def main():
     exe = args[0] if args else ""
     script = args[1] if len(args) > 1 else ""
     checks["1e executable exists"] = bool(exe) and os.path.exists(exe)
-    checks["1f core entrypoint exists"] = bool(script) and os.path.exists(script)
-    checks["1g StandardOutPath set"] = bool(p.get("StandardOutPath"))
-    checks["1h StandardErrorPath set"] = bool(p.get("StandardErrorPath"))
+    checks["1f core entrypoint uses pinned release link"] = script == "/Volumes/Storage/FLOYD_RUNTIME/releases/core/current/core/daemon/src/main.ts"
+    checks["1g working directory uses pinned release link"] = p.get("WorkingDirectory") == "/Volumes/Storage/FLOYD_RUNTIME/releases/core/current"
+    checks["1h StandardOutPath set"] = bool(p.get("StandardOutPath"))
+    checks["1i StandardErrorPath set"] = bool(p.get("StandardErrorPath"))
 
     # consistency with the auth-broker pattern (same keys present), if available
     if os.path.exists(AUTH_BROKER):
         with open(AUTH_BROKER, "rb") as f:
             ab = plistlib.load(f)
         pattern_keys = {"Label", "KeepAlive", "RunAtLoad", "ProgramArguments", "StandardOutPath", "StandardErrorPath"}
-        checks["1i matches auth-broker key pattern"] = pattern_keys.issubset(p.keys()) and pattern_keys.issubset(ab.keys())
+        checks["1j matches auth-broker key pattern"] = pattern_keys.issubset(p.keys()) and pattern_keys.issubset(ab.keys())
     else:
-        checks["1i matches auth-broker key pattern"] = {"Label","KeepAlive","RunAtLoad","ProgramArguments"}.issubset(p.keys())
+        checks["1j matches auth-broker key pattern"] = {"Label","KeepAlive","RunAtLoad","ProgramArguments"}.issubset(p.keys())
 
     # plutil lint as an independent structural check
     r = subprocess.run(["/usr/bin/plutil", "-lint", PLIST], capture_output=True, text=True)
-    checks["1j plutil lint OK"] = r.returncode == 0
+    checks["1k plutil lint OK"] = r.returncode == 0
 
     print("=== OBJECTIVE 4 PLIST VALIDATION ===")
     for k, v in checks.items():
