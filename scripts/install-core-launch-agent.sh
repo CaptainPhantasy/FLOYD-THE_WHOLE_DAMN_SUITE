@@ -96,7 +96,9 @@ OLD_CURRENT=
 if test -L "$CURRENT"; then OLD_CURRENT=$(readlink "$CURRENT"); fi
 NEW_CURRENT="$RELEASES/.current.$$"
 ln -s "$RELEASE" "$NEW_CURRENT"
-mv -f "$NEW_CURRENT" "$CURRENT"
+# macOS mv follows a destination symlink to a directory unless -h is used.
+# Without -h, an upgrade silently deposits NEW_CURRENT inside the old release.
+mv -fh "$NEW_CURRENT" "$CURRENT"
 NEW_CURRENT=
 test -f "$entrypoint"
 
@@ -141,7 +143,7 @@ rollback_service() {
   if test -n "$OLD_CURRENT"; then
     rollback_link="$RELEASES/.rollback.$$"
     ln -s "$OLD_CURRENT" "$rollback_link"
-    mv -f "$rollback_link" "$CURRENT"
+    mv -fh "$rollback_link" "$CURRENT"
   else
     rm -f "$CURRENT"
   fi
