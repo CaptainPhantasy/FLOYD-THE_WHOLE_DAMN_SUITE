@@ -18,7 +18,7 @@
 
   /* ---------- background stage (the base frame is nothing but this) ---------- */
   .stage { position: fixed; inset: 0; }
-  .stage-bg { position: absolute; inset: 0; background: var(--bg) center / cover no-repeat; transition: background-image .4s ease, opacity .4s ease; }
+  .stage-bg { position: absolute; inset: 0; background: var(--bg) center / contain no-repeat; transition: background-image .4s ease, opacity .4s ease; }
   .stage-frame { position: absolute; inset: 0; border: 0; width: 100%; height: 100%; background: transparent; display: none; }
   .stage-frame.active { display: block; }
 
@@ -84,15 +84,25 @@
   body:not([data-app="home"]) .hint { display: none; }
   .toast { position: fixed; z-index: 60; right: 16px; bottom: 16px; max-width: 420px; background: var(--panel-2); border: 1px solid #7f1d1d; border-radius: 9px; padding: 10px 13px; font: 12px ui-monospace, monospace; display: none; }
   .toast.show { display: block; }
-  .loading { position: fixed; z-index: 20; inset: 0; display: none; place-items: center; color: var(--muted); font: 12px ui-monospace, monospace; letter-spacing: .12em; }
+  .loading { position: fixed; z-index: 20; inset: 0; display: none; place-items: center; color: var(--text); font: 12px ui-monospace, monospace; letter-spacing: .12em;
+    background: #08090c url(/backgrounds/sweet-ecosystem.png) center / contain no-repeat; }
+  .loading span { background: rgba(8,9,12,.72); border: 1px solid var(--line); border-radius: 9px; padding: 8px 16px; }
   .loading.show { display: grid; }
+
+  /* ---------- splash (initial boot) ---------- */
+  .splash { position: fixed; z-index: 100; inset: 0; display: grid; place-items: end center;
+    background: #08090c url(/backgrounds/sweet-ecosystem.png) center / contain no-repeat;
+    transition: opacity .6s ease; }
+  .splash.gone { opacity: 0; pointer-events: none; }
+  .splash .boot { margin-bottom: 6vh; color: var(--muted); font: 12px ui-monospace, monospace; letter-spacing: .18em; text-transform: uppercase;
+    background: rgba(8,9,12,.72); border: 1px solid var(--line); border-radius: 9px; padding: 8px 16px; }
 </style>
 </head>
 <body data-vertical="desktop" data-app="home" data-chrome="visible">
 
 <div class="stage">
   <div class="stage-bg" id="stageBg"></div>
-  <div class="loading" id="loading">LAUNCHING…</div>
+  <div class="loading" id="loading"><span>LAUNCHING…</span></div>
   <!-- iframes are created per app and kept alive so switching apps never loses state -->
   <div id="frames" style="position:absolute; inset:0;"></div>
 </div>
@@ -117,14 +127,16 @@
 <nav class="bottomnav" id="bottomnav" aria-label="Floyd apps (mobile)"></nav>
 <div class="sheet" id="mobileSheet"><h2>ALL APPS</h2><div id="sheetList" class="apps" style="padding:0"></div></div>
 
+<div class="splash" id="splash"><div class="boot">FLOYD · BOOTING</div></div>
 <div class="hint">hover the left edge · apps drawer</div>
 <div class="toast" id="toast" role="alert"></div>
 
 <script type="module">
 /* ============ shared logic layer (never forked per vertical) ============ */
 const el = (id) => document.getElementById(id);
+const DEFAULT_BG = "sweet-ecosystem.png";
 const state = {
-  registry: [], status: {}, backgrounds: [], bgIndex: Number(localStorage.getItem("floyd.bgIndex") || 0),
+  registry: [], status: {}, backgrounds: [], bgFile: localStorage.getItem("floyd.bgFile") || DEFAULT_BG,
   activeApp: localStorage.getItem("floyd.activeApp") || "home",
   vertical: null, override: localStorage.getItem("floyd.verticalOverride") || null,
   frames: new Map(),
@@ -163,17 +175,22 @@ async function loadRegistry() {
 setInterval(async () => {
   try { const st = await (await fetch("/api/status")).json(); state.status = st.apps; state.backgrounds = st.backgrounds; renderNav(); } catch {}
 }, 15000);
+/* heartbeat: tell the chrono daemon which app iframes are alive in this session */
+const beat = () => fetch("/api/heartbeat", { method: "POST", body: JSON.stringify({ apps: [...state.frames.keys()] }) }).catch(() => {});
+setInterval(beat, 60000);
+addEventListener("pagehide", beat);
 
 /* ---- background stage ---- */
 function applyBackground() {
   if (!state.backgrounds.length) { el("stageBg").style.backgroundImage = ""; return; }
-  const file = state.backgrounds[state.bgIndex % state.backgrounds.length];
+  const file = state.backgrounds.includes(state.bgFile) ? state.bgFile : state.backgrounds[0];
   el("stageBg").style.backgroundImage = `url(/backgrounds/${encodeURIComponent(file)})`;
 }
 function cycleBackground() {
   if (!state.backgrounds.length) return toast("Drop a PNG/TIFF into apps/frame/backgrounds/");
-  state.bgIndex = (state.bgIndex + 1) % state.backgrounds.length;
-  localStorage.setItem("floyd.bgIndex", state.bgIndex);
+  const i = state.backgrounds.indexOf(state.bgFile);
+  state.bgFile = state.backgrounds[(i + 1) % state.backgrounds.length];
+  localStorage.setItem("floyd.bgFile", state.bgFile);
   applyBackground();
 }
 
@@ -286,7 +303,13 @@ addEventListener("keydown", (e) => {
 });
 
 applyVertical();
-loadRegistry().then(() => { if (state.activeApp !== "home") openApp(state.activeApp); }).catch((e) => toast(e));
+loadRegistry()
+  .then(() => { if (state.activeApp !== "home") openApp(state.activeApp); })
+  .catch((e) => toast(e))
+  .finally(() => {
+    const splash = el("splash");
+    setTimeout(() => { splash.classList.add("gone"); setTimeout(() => splash.remove(), 700); }, 400);
+  });
 </script>
 </body>
 </html>

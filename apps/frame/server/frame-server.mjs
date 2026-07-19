@@ -161,6 +161,13 @@ const server = http.createServer(async (req, res) => {
       }
       return json(res, 200, { apps: out, backgrounds: listBackgrounds() });
     }
+    if (path === "/api/heartbeat" && req.method === "POST") {
+      let body = ""; for await (const c of req) body += c;
+      let apps = [];
+      try { apps = JSON.parse(body).apps ?? []; } catch {}
+      writeFileSync(join(ROOT, "heartbeat.json"), JSON.stringify({ ts: Date.now(), apps }));
+      return json(res, 200, { ok: true });
+    }
     if (path.startsWith("/api/launch/") && req.method === "POST") {
       const id = decodeURIComponent(path.slice("/api/launch/".length));
       return json(res, 200, await ensureApp(id));
