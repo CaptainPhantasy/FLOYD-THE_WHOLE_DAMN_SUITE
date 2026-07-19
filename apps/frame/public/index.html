@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>FLOYD</title>
+<style>
+  :root {
+    --bg: #08090c; --panel: #101218; --panel-2: #171a22; --line: #232734;
+    --text: #e8eaf0; --muted: #9aa1b2; --faint: #5c6374; --accent: #22d3ee;
+    --drawer-closed: 68px; --drawer-open: 288px;
+    --spring: cubic-bezier(.2, 1.4, .3, 1);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; overflow: hidden; }
+  body { background: var(--bg); color: var(--text); font: 14px/1.45 -apple-system, "SF Pro Text", system-ui, sans-serif; }
+  @media (prefers-reduced-motion: reduce) { :root { --spring: linear; } * { transition-duration: .01ms !important; } }
+
+  /* ---------- background stage (the base frame is nothing but this) ---------- */
+  .stage { position: fixed; inset: 0; }
+  .stage-bg { position: absolute; inset: 0; background: var(--bg) center / cover no-repeat; transition: background-image .4s ease, opacity .4s ease; }
+  .stage-frame { position: absolute; inset: 0; border: 0; width: 100%; height: 100%; background: transparent; display: none; }
+  .stage-frame.active { display: block; }
+
+  /* ---------- spring-loaded hover drawer ---------- */
+  .drawer { position: fixed; z-index: 40; top: 0; left: 0; bottom: 0; width: var(--drawer-closed);
+    background: color-mix(in srgb, var(--panel) 88%, transparent); backdrop-filter: blur(18px);
+    border-right: 1px solid var(--line); overflow: hidden;
+    transition: width .45s var(--spring); display: flex; flex-direction: column; }
+  .drawer.open { width: var(--drawer-open); box-shadow: 24px 0 60px rgba(0,0,0,.45); }
+  .drawer-head { display: flex; align-items: center; gap: 12px; padding: 18px 16px; min-height: 64px; }
+  .mark { width: 34px; height: 34px; flex: 0 0 34px; border-radius: 9px; background: linear-gradient(135deg, #f0f, #22d3ee); display: grid; place-items: center; font-weight: 800; color: #000; font-size: 18px; }
+  .wordmark { font-weight: 700; letter-spacing: .14em; white-space: nowrap; opacity: 0; transform: translateX(-8px); transition: opacity .3s ease .08s, transform .45s var(--spring) .05s; }
+  .drawer.open .wordmark { opacity: 1; transform: none; }
+  .apps { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 6px 10px; display: flex; flex-direction: column; gap: 8px; scrollbar-width: thin; }
+  .app { display: flex; align-items: center; gap: 12px; width: 100%; border: 1px solid transparent; border-radius: 12px;
+    padding: 9px; background: transparent; color: var(--text); cursor: pointer; text-align: left; min-height: 56px;
+    transition: background .18s ease, border-color .18s ease, transform .3s var(--spring); }
+  .app:hover { background: var(--panel-2); transform: translateX(2px); }
+  .app.active { border-color: var(--app-accent, var(--accent)); background: var(--panel-2); }
+  .app-icon { width: 38px; height: 38px; flex: 0 0 38px; border-radius: 9px; border: 1px solid var(--line); display: grid; place-items: center;
+    color: var(--app-accent, var(--accent)); font: 700 13px ui-monospace, monospace; background: #0b0d12; position: relative; }
+  .app-dot { position: absolute; right: -3px; top: -3px; width: 9px; height: 9px; border-radius: 50%; background: #333a48; border: 2px solid var(--panel); }
+  .app.up .app-dot { background: #34d399; }
+  .app-meta { min-width: 0; opacity: 0; transform: translateX(-10px); transition: opacity .25s ease .1s, transform .45s var(--spring) .07s; }
+  .drawer.open .app-meta { opacity: 1; transform: none; }
+  .app-meta strong { display: block; font-size: 13px; letter-spacing: .04em; white-space: nowrap; }
+  .app-meta span { display: block; font-size: 11px; color: var(--muted); white-space: nowrap; }
+  .drawer-foot { padding: 10px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; }
+
+  /* stage shifts with the drawer edge in desktop */
+  .stage { left: 0; transition: left .45s var(--spring); }
+  body[data-vertical="desktop"] .stage, body[data-vertical="tablet"] .stage { left: var(--drawer-closed); }
+
+  .titlebar { position: fixed; z-index: 30; top: 0; right: 0; left: var(--drawer-closed); height: 44px;
+    display: flex; align-items: center; gap: 10px; padding: 0 14px;
+    background: color-mix(in srgb, var(--panel) 66%, transparent); backdrop-filter: blur(14px); border-bottom: 1px solid var(--line);
+    transition: left .45s var(--spring), opacity .3s ease; }
+  .titlebar .app-name { font: 600 12px ui-monospace, monospace; letter-spacing: .1em; color: var(--muted); }
+  .titlebar .spacer { flex: 1; }
+  .chip { border: 1px solid var(--line); background: transparent; color: var(--muted); border-radius: 7px; padding: 5px 11px; font: 12px ui-monospace, monospace; cursor: pointer; }
+  .chip:hover { color: var(--text); border-color: var(--faint); }
+  body[data-chrome="hidden"] .titlebar { opacity: 0; pointer-events: none; }
+  body[data-app="home"] .titlebar { opacity: 0; pointer-events: none; }
+
+  /* ---------- mobile vertical: bottom nav, no hover ---------- */
+  body[data-vertical="mobile"] .drawer { display: none; }
+  body[data-vertical="mobile"] .stage { left: 0; }
+  body[data-vertical="mobile"] .titlebar { left: 0; padding-top: env(safe-area-inset-top); height: calc(44px + env(safe-area-inset-top)); }
+  .bottomnav { display: none; }
+  body[data-vertical="mobile"] .bottomnav { position: fixed; z-index: 40; left: 0; right: 0; bottom: 0; display: flex;
+    background: color-mix(in srgb, var(--panel) 92%, transparent); backdrop-filter: blur(18px); border-top: 1px solid var(--line);
+    padding: 6px 8px calc(6px + env(safe-area-inset-bottom)); }
+  .bottomnav button { flex: 1; min-height: 48px; background: none; border: 0; color: var(--muted); font: 10px ui-monospace, monospace; display: flex; flex-direction: column; align-items: center; gap: 3px; cursor: pointer; border-radius: 10px; }
+  .bottomnav button.active { color: var(--accent); background: var(--panel-2); }
+  .bottomnav .glyph { font-size: 16px; font-weight: 700; }
+  .sheet { position: fixed; z-index: 50; left: 0; right: 0; bottom: 0; transform: translateY(105%); transition: transform .45s var(--spring);
+    background: var(--panel); border-radius: 18px 18px 0 0; border: 1px solid var(--line); max-height: 72dvh; overflow-y: auto; padding: 14px 14px calc(14px + env(safe-area-inset-bottom)); }
+  .sheet.open { transform: none; }
+  .sheet h2 { font-size: 13px; letter-spacing: .1em; color: var(--muted); margin-bottom: 10px; }
+
+  /* ---------- home hint ---------- */
+  .hint { position: fixed; z-index: 10; bottom: 26px; left: 50%; transform: translateX(-50%); color: var(--faint); font: 11px ui-monospace, monospace; letter-spacing: .12em; text-transform: uppercase; opacity: .8; pointer-events: none; }
+  body:not([data-app="home"]) .hint { display: none; }
+  .toast { position: fixed; z-index: 60; right: 16px; bottom: 16px; max-width: 420px; background: var(--panel-2); border: 1px solid #7f1d1d; border-radius: 9px; padding: 10px 13px; font: 12px ui-monospace, monospace; display: none; }
+  .toast.show { display: block; }
+  .loading { position: fixed; z-index: 20; inset: 0; display: none; place-items: center; color: var(--muted); font: 12px ui-monospace, monospace; letter-spacing: .12em; }
+  .loading.show { display: grid; }
+</style>
+</head>
+<body data-vertical="desktop" data-app="home" data-chrome="visible">
+
+<div class="stage">
+  <div class="stage-bg" id="stageBg"></div>
+  <div class="loading" id="loading">LAUNCHING…</div>
+  <!-- iframes are created per app and kept alive so switching apps never loses state -->
+  <div id="frames" style="position:absolute; inset:0;"></div>
+</div>
+
+<header class="titlebar" id="titlebar">
+  <span class="app-name" id="titleAppName"></span>
+  <span class="spacer"></span>
+  <button class="chip" id="chipTerminal" title="Summon TerminalOne">Terminal</button>
+  <button class="chip" id="chipBrowser" title="Open Chrome with Floyd TTY Bridge">Browser</button>
+  <button class="chip" id="chipBg" title="Cycle background">BG</button>
+  <button class="chip" id="chipHome" title="Back to the frame">Home</button>
+</header>
+
+<nav class="drawer" id="drawer" aria-label="Floyd apps">
+  <div class="drawer-head"><div class="mark">F</div><div class="wordmark">FLOYD LABS</div></div>
+  <div class="apps" id="appList"></div>
+  <div class="drawer-foot">
+    <button class="app" id="settingsBtn" style="min-height:44px"><div class="app-icon">⚙</div><div class="app-meta"><strong>Settings</strong><span>Background · verticals</span></div></button>
+  </div>
+</nav>
+
+<nav class="bottomnav" id="bottomnav" aria-label="Floyd apps (mobile)"></nav>
+<div class="sheet" id="mobileSheet"><h2>ALL APPS</h2><div id="sheetList" class="apps" style="padding:0"></div></div>
+
+<div class="hint">hover the left edge · apps drawer</div>
+<div class="toast" id="toast" role="alert"></div>
+
+<script type="module">
+/* ============ shared logic layer (never forked per vertical) ============ */
+const el = (id) => document.getElementById(id);
+const state = {
+  registry: [], status: {}, backgrounds: [], bgIndex: Number(localStorage.getItem("floyd.bgIndex") || 0),
+  activeApp: localStorage.getItem("floyd.activeApp") || "home",
+  vertical: null, override: localStorage.getItem("floyd.verticalOverride") || null,
+  frames: new Map(),
+};
+const toast = (msg) => { const t = el("toast"); t.textContent = String(msg); t.classList.add("show"); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove("show"), 6000); };
+
+/* ---- TVDS capability classification (capability-first, width tiebreaker) ---- */
+function classify() {
+  if (state.override) return state.override;
+  const fine = matchMedia("(pointer: fine)").matches, hover = matchMedia("(hover: hover)").matches;
+  if (fine && hover) return "desktop";
+  const smallest = Math.min(innerWidth, innerHeight);
+  const appleDesktopUA = /Mac/.test(navigator.userAgent) && navigator.maxTouchPoints > 1;
+  if (appleDesktopUA) return "tablet";
+  return smallest >= 600 ? "tablet" : "mobile";
+}
+let classifyTimer;
+function applyVertical() {
+  const v = classify();
+  if (v === state.vertical) return;
+  state.vertical = v;
+  document.body.dataset.vertical = v;
+  renderNav();
+}
+addEventListener("resize", () => { clearTimeout(classifyTimer); classifyTimer = setTimeout(applyVertical, 250); });
+
+/* ---- registry + status ---- */
+async function loadRegistry() {
+  const reg = await (await fetch("/api/registry")).json();
+  state.registry = reg.apps;
+  const st = await (await fetch("/api/status")).json();
+  state.status = st.apps; state.backgrounds = st.backgrounds;
+  applyBackground();
+  renderNav();
+}
+setInterval(async () => {
+  try { const st = await (await fetch("/api/status")).json(); state.status = st.apps; state.backgrounds = st.backgrounds; renderNav(); } catch {}
+}, 15000);
+
+/* ---- background stage ---- */
+function applyBackground() {
+  if (!state.backgrounds.length) { el("stageBg").style.backgroundImage = ""; return; }
+  const file = state.backgrounds[state.bgIndex % state.backgrounds.length];
+  el("stageBg").style.backgroundImage = `url(/backgrounds/${encodeURIComponent(file)})`;
+}
+function cycleBackground() {
+  if (!state.backgrounds.length) return toast("Drop a PNG/TIFF into apps/frame/backgrounds/");
+  state.bgIndex = (state.bgIndex + 1) % state.backgrounds.length;
+  localStorage.setItem("floyd.bgIndex", state.bgIndex);
+  applyBackground();
+}
+
+/* ---- app launching: iframes persist so context is never lost on switch ---- */
+async function openApp(id) {
+  if (id === "home") return activate("home");
+  const app = state.registry.find((a) => a.id === id);
+  if (!app) return;
+  if (app.kind === "action") {
+    try { await fetch(`/api/action/${app.action}`, { method: "POST", body: "{}" }); }
+    catch (e) { toast(e); }
+    return;
+  }
+  el("loading").classList.add("show");
+  try {
+    const r = await (await fetch(`/api/launch/${id}`, { method: "POST" })).json();
+    if (r.managed && !r.up) throw new Error(`${app.name}: ${r.error || "failed to start"}`);
+    let frame = state.frames.get(id);
+    if (!frame) {
+      frame = document.createElement("iframe");
+      frame.className = "stage-frame";
+      frame.title = app.name;
+      const port = r.port ?? new URL(app.target).port;
+      frame.src = app.kind === "terminal" ? `http://127.0.0.1:${port}/` : app.target;
+      el("frames").appendChild(frame);
+      state.frames.set(id, frame);
+    }
+    activate(id);
+  } catch (e) { toast(e); }
+  finally { el("loading").classList.remove("show"); }
+}
+function activate(id) {
+  state.activeApp = id;
+  localStorage.setItem("floyd.activeApp", id);
+  document.body.dataset.app = id;
+  for (const [fid, frame] of state.frames) frame.classList.toggle("active", fid === id);
+  const app = state.registry.find((a) => a.id === id);
+  el("titleAppName").textContent = app ? app.name : "";
+  renderNav();
+}
+
+/* ============ per-vertical presentation trees ============ */
+function appButton(app) {
+  const up = state.status[app.id]?.up;
+  const initials = app.name.replace(/FLOYD\s*/i, "").trim().slice(0, 2).toUpperCase() || "F";
+  const btn = document.createElement("button");
+  btn.className = `app ${up ? "up" : ""} ${state.activeApp === app.id ? "active" : ""}`;
+  btn.style.setProperty("--app-accent", app.accent || "#22d3ee");
+  btn.innerHTML = `<div class="app-icon">${initials}<span class="app-dot"></span></div>
+    <div class="app-meta"><strong>${app.name}</strong><span>${app.subtitle ?? ""}</span></div>`;
+  btn.addEventListener("click", () => openApp(app.id));
+  return btn;
+}
+function renderNav() {
+  // desktop + tablet: drawer
+  const list = el("appList"); list.replaceChildren(...state.registry.map(appButton));
+  // mobile: bottom nav = first 4 apps + "All" sheet
+  const nav = el("bottomnav"); nav.replaceChildren();
+  state.registry.slice(0, 4).forEach((app) => {
+    const b = document.createElement("button");
+    b.className = state.activeApp === app.id ? "active" : "";
+    b.innerHTML = `<span class="glyph">${app.name.replace(/FLOYD\s*/i, "").trim().slice(0, 1)}</span>${app.name.split(" ")[0]}`;
+    b.addEventListener("click", () => openApp(app.id));
+    nav.appendChild(b);
+  });
+  const all = document.createElement("button");
+  all.innerHTML = `<span class="glyph">≡</span>All`;
+  all.addEventListener("click", () => el("mobileSheet").classList.toggle("open"));
+  nav.appendChild(all);
+  el("sheetList").replaceChildren(...state.registry.map(appButton));
+}
+
+/* ---- spring drawer: opens on hover (desktop), tap-to-toggle (tablet) ---- */
+const drawer = el("drawer");
+let closeTimer;
+drawer.addEventListener("pointerenter", (e) => { if (e.pointerType === "mouse") { clearTimeout(closeTimer); drawer.classList.add("open"); } });
+drawer.addEventListener("pointerleave", (e) => { if (e.pointerType === "mouse") { closeTimer = setTimeout(() => drawer.classList.remove("open"), 180); } });
+drawer.addEventListener("click", (e) => { if (document.body.dataset.vertical === "tablet" && !drawer.classList.contains("open")) { drawer.classList.add("open"); e.stopPropagation(); } });
+document.addEventListener("click", (e) => { if (document.body.dataset.vertical === "tablet" && !drawer.contains(e.target)) drawer.classList.remove("open"); });
+drawer.addEventListener("focusin", () => drawer.classList.add("open"));
+drawer.addEventListener("focusout", (e) => { if (!drawer.contains(e.relatedTarget)) drawer.classList.remove("open"); });
+
+/* ---- titlebar chips ---- */
+el("chipHome").addEventListener("click", () => activate("home"));
+el("chipBg").addEventListener("click", cycleBackground);
+el("chipTerminal").addEventListener("click", () => openApp("terminalone"));
+el("chipBrowser").addEventListener("click", async () => {
+  try { await fetch("/api/action/open-chrome", { method: "POST", body: "{}" }); } catch (e) { toast(e); }
+});
+el("settingsBtn").addEventListener("click", () => {
+  const next = { null: "mobile", mobile: "tablet", tablet: "desktop", desktop: null }[String(state.override)];
+  state.override = next;
+  if (next) localStorage.setItem("floyd.verticalOverride", next); else localStorage.removeItem("floyd.verticalOverride");
+  state.vertical = null; applyVertical();
+  toast(`Vertical override: ${next ?? "auto (capability)"}`);
+});
+/* keyboard: ⌘K opens drawer, ⌘1..9 direct app switch, Esc home */
+addEventListener("keydown", (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key === "k") { e.preventDefault(); drawer.classList.toggle("open"); }
+  if ((e.metaKey || e.ctrlKey) && /^[1-9]$/.test(e.key)) {
+    const app = state.registry[Number(e.key) - 1];
+    if (app) { e.preventDefault(); openApp(app.id); }
+  }
+  if (e.key === "Escape" && !e.metaKey) activate("home");
+});
+
+applyVertical();
+loadRegistry().then(() => { if (state.activeApp !== "home") openApp(state.activeApp); }).catch((e) => toast(e));
+</script>
+</body>
+</html>
