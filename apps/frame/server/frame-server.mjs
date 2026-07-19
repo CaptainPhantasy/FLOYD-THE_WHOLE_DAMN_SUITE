@@ -48,7 +48,11 @@ const MANAGED = {
     port: 13020,
     cwd: join(SURFACES, "ide"),
     cmd: NODE_BIN, args: ["server/cursem-server.mjs"],
-    env: { CURSEM_PORT: "13020" },
+    env: {
+      CURSEM_PORT: "13020",
+      // Allow embedding ONLY by the frame's own origins (local + tailnet).
+      CURSEM_FRAME_ANCESTORS: "http://127.0.0.1:13030 http://localhost:13030 http://floyd.localhost:13030 https://douglass-mac-mini.tail58d565.ts.net:8450",
+    },
   },
   "floyd-desktop": {
     port: 13021,
@@ -121,6 +125,52 @@ function openChrome(url) {
     execFile("open", args, (err) => (err ? fail(err) : done(true))));
 }
 
+// ---- chrono sandbox bridge -------------------------------------------------
+// Exposes the Python time-manipulation controller (ops/chrono/chrono_sandbox.py)
+// per surface. Only surfaces that are git repos are eligible. The UI drives
+// this through /api/chrono/<surface>/<op>.
+const CHRONO_PY = "/opt/homebrew/bin/python3";
+const CHRONO_CLI = "/Volumes/Storage/FLOYD_WORKSTATION/ops/chrono/chrono_sandbox.py";
+const CHRONO_SURFACES = {
+  ide: join(SURFACES, "ide"),
+  desktop: join(SURFACES, "desktop"),
+  launcher: join(SURFACES, "launcher"),
+  pty: PTY_COPY,
+  workstation: "/Volumes/Storage/FLOYD_WORKSTATION",
+};
+// op -> argv builder. Validation is strict: no free-form strings reach the CLI.
+const CHRONO_OPS = {
+  snapshot: (q) => ["snapshot", ...(q.message ? ["-m", q.message] : [])],
+  rewind: (q) => ["rewind", ...(q.to ? ["--to", q.to] : []), ...(q.hard === "1" ? ["--hard"] : [])],
+  fork: (q) => {
+    const names = String(q.names || "").split(",").map((s) => s.trim()).filter(Boolean);
+    if (!names.length || names.some((n) => !/^[\w-]{1,40}$/.test(n))) return null;
+    return ["fork", ...names];
+  },
+  forks: () => ["forks"],
+  diff: (q) => (/^[\w-]{1,40}$/.test(q.name || "") ? ["diff", q.name] : null),
+  "merge-winner": (q) => (/^[\w-]{1,40}$/.test(q.name || "") ? ["merge-winner", q.name] : null),
+  prune: (q) => (q.all === "1" ? ["prune", "--all"] : (/^[\w-]{1,40}$/.test(q.name || "") ? ["prune", q.name] : null)),
+  ledger: (q) => ["ledger", "-n", String(Math.min(Number(q.n) || 20, 100))],
+  log: () => null, // handled inline below (read-only git log)
+};
+function chronoRun(repo, argv) {
+  return new Promise((done) => {
+    execFile(CHRONO_PY, [CHRONO_CLI, repo, ...argv], { timeout: 60000, maxBuffer: 8 * 1024 * 1024 }, (err, stdout, stderr) => {
+      if (stdout) { try { return done(JSON.parse(stdout)); } catch {} }
+      done({ ok: false, error: (stderr || String(err) || "chrono failed").slice(0, 500) });
+    });
+  });
+}
+function chronoLog(repo, n) {
+  return new Promise((done) => {
+    execFile("git", ["log", "--pretty=%h|%ad|%s", "--date=format:%H:%M:%S", `-${n}`], { cwd: repo, timeout: 15000 }, (err, stdout) => {
+      if (err) return done({ ok: false, error: String(err).slice(0, 300) });
+      done({ ok: true, commits: stdout.trim().split("\n").filter(Boolean).map((l) => { const [sha, time, ...s] = l.split("|"); return { sha, time, subject: s.join("|") }; }) });
+    });
+  });
+}
+
 // ---- http ------------------------------------------------------------------
 const MIME = { ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".json": "application/json", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".svg": "image/svg+xml", ".tiff": "image/tiff", ".tif": "image/tiff" };
 const json = (res, code, body) => { res.writeHead(code, { "content-type": "application/json" }); res.end(JSON.stringify(body)); };
@@ -171,6 +221,51 @@ const server = http.createServer(async (req, res) => {
     if (path.startsWith("/api/launch/") && req.method === "POST") {
       const id = decodeURIComponent(path.slice("/api/launch/".length));
       return json(res, 200, await ensureApp(id));
+    }
+    if (path.startsWith("/api/quit/") && req.method === "POST") {
+      const id = decodeURIComponent(path.slice("/api/quit/".length));
+      const spec = MANAGED[id];
+      if (!spec) return json(res, 404, { id, error: "not a managed app" });
+      // Prefer our child handle; fall back to whoever owns the port (e.g. a
+      // server that survived a frame restart).
+      const child = children.get(id);
+      if (child) { try { child.kill("SIGTERM"); } catch {} children.delete(id); }
+      else {
+        await new Promise((done) => {
+          execFile("lsof", ["-nP", "-ti", `tcp:${spec.port}`, "-sTCP:LISTEN"], (err, stdout) => {
+            const pid = Number((stdout || "").trim().split("\n")[0]);
+            if (pid) { try { process.kill(pid, "SIGTERM"); } catch {} }
+            done();
+          });
+        });
+      }
+      // Confirm the port actually closed (graceful shutdown can take a moment).
+      for (let i = 0; i < 20; i++) {
+        if (!(await portOpen(spec.port))) return json(res, 200, { id, quit: true });
+        await new Promise((r) => setTimeout(r, 250));
+      }
+      return json(res, 200, { id, quit: false, error: "port still open after SIGTERM" });
+    }
+    // chrono sandbox: GET /api/chrono/surfaces | POST /api/chrono/<surface>/<op>?...
+    if (path === "/api/chrono/surfaces" && req.method === "GET") {
+      const out = {};
+      for (const [name, repo] of Object.entries(CHRONO_SURFACES)) out[name] = { repo, git: existsSync(join(repo, ".git")) };
+      return json(res, 200, { ok: true, surfaces: out });
+    }
+    if (path.startsWith("/api/chrono/")) {
+      const [surface, op] = path.slice("/api/chrono/".length).split("/");
+      const repo = CHRONO_SURFACES[surface];
+      if (!repo) return json(res, 404, { ok: false, error: `unknown surface ${surface}` });
+      if (!existsSync(join(repo, ".git"))) return json(res, 400, { ok: false, error: `${surface} is not a git repo` });
+      const q = Object.fromEntries(url.searchParams);
+      const readOnly = ["forks", "diff", "ledger", "log"].includes(op);
+      if (!readOnly && req.method !== "POST") return json(res, 405, { ok: false, error: "mutating chrono ops require POST" });
+      if (op === "log") return json(res, 200, await chronoLog(repo, Math.min(Number(q.n) || 15, 60)));
+      const build = CHRONO_OPS[op];
+      if (!build) return json(res, 404, { ok: false, error: `unknown op ${op}` });
+      const argv = build(q);
+      if (!argv) return json(res, 400, { ok: false, error: `invalid arguments for ${op}` });
+      return json(res, 200, await chronoRun(repo, argv));
     }
     if (path === "/api/action/open-chrome" && req.method === "POST") {
       let body = ""; for await (const c of req) body += c;

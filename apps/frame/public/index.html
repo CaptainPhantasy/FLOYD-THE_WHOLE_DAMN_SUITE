@@ -41,6 +41,10 @@
   .app.active { border-color: var(--app-accent, var(--accent)); background: var(--panel-2); }
   .app-icon { width: 38px; height: 38px; flex: 0 0 38px; border-radius: 9px; border: 1px solid var(--line); display: grid; place-items: center;
     color: var(--app-accent, var(--accent)); font: 700 13px ui-monospace, monospace; background: #0b0d12; position: relative; }
+  .app-quit { display: none; margin-left: auto; flex: 0 0 22px; width: 22px; height: 22px; border-radius: 6px; border: 1px solid var(--line);
+    background: transparent; color: var(--muted); font: 700 12px ui-monospace, monospace; cursor: pointer; place-items: center; }
+  .drawer.open .app.up .app-quit { display: grid; }
+  .app-quit:hover { border-color: #f87171; color: #f87171; }
   .app-dot { position: absolute; right: -3px; top: -3px; width: 9px; height: 9px; border-radius: 50%; background: #333a48; border: 2px solid var(--panel); }
   .app.up .app-dot { background: #34d399; }
   .app-meta { min-width: 0; opacity: 0; transform: translateX(-10px); transition: opacity .25s ease .1s, transform .45s var(--spring) .07s; }
@@ -107,6 +111,34 @@
     display: flex; align-items: center; gap: 10px; }
   .splash .boot::after { content: ""; width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--faint); border-top-color: var(--accent); animation: spin 1s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
+  /* ---------- chrono panel ---------- */
+  .chrono { position: fixed; z-index: 45; top: 0; right: 0; bottom: 0; width: 380px; transform: translateX(105%);
+    background: color-mix(in srgb, var(--panel) 94%, transparent); backdrop-filter: blur(18px);
+    border-left: 1px solid var(--line); transition: transform .45s var(--spring); display: flex; flex-direction: column; }
+  .chrono.open { transform: none; box-shadow: -24px 0 60px rgba(0,0,0,.45); }
+  .chrono-head { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+  .chrono-head strong { font: 700 13px ui-monospace, monospace; letter-spacing: .12em; }
+  .chrono-head select { margin-left: auto; background: var(--panel-2); color: var(--text); border: 1px solid var(--line); border-radius: 7px; padding: 5px 8px; font: 12px ui-monospace, monospace; }
+  .chrono-body { flex: 1; overflow-y: auto; padding: 12px 14px; display: flex; flex-direction: column; gap: 14px; scrollbar-width: thin; }
+  .chrono h3 { font: 700 11px ui-monospace, monospace; letter-spacing: .14em; color: var(--muted); text-transform: uppercase; margin-bottom: 6px; }
+  .chrono-row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .chrono-row input { flex: 1; min-width: 120px; background: var(--panel-2); color: var(--text); border: 1px solid var(--line); border-radius: 7px; padding: 6px 9px; font: 12px ui-monospace, monospace; }
+  .cbtn { border: 1px solid var(--line); background: var(--panel-2); color: var(--text); border-radius: 7px; padding: 6px 11px; font: 12px ui-monospace, monospace; cursor: pointer; white-space: nowrap; }
+  .cbtn:hover { border-color: var(--accent); }
+  .cbtn.danger:hover { border-color: #f87171; color: #f87171; }
+  .cbtn:disabled { opacity: .4; cursor: default; }
+  .timeline { display: flex; flex-direction: column; gap: 0; }
+  .tl-item { display: flex; gap: 10px; padding: 5px 0; font: 12px ui-monospace, monospace; align-items: baseline; }
+  .tl-item .sha { color: var(--accent); cursor: pointer; }
+  .tl-item .sha:hover { text-decoration: underline; }
+  .tl-item .t { color: var(--faint); }
+  .tl-item .s { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .fork-item { border: 1px solid var(--line); border-radius: 9px; padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; font: 12px ui-monospace, monospace; }
+  .fork-item .frow { display: flex; gap: 8px; align-items: center; }
+  .fork-item .fname { font-weight: 700; color: var(--accent); }
+  .fork-item .fstat { color: var(--muted); font-size: 11px; }
+  .chrono-out { background: #0b0d12; border: 1px solid var(--line); border-radius: 9px; padding: 8px 10px; font: 11px ui-monospace, monospace; color: var(--muted); white-space: pre-wrap; max-height: 180px; overflow-y: auto; }
+  .chrono-out:empty { display: none; }
 </style>
 </head>
 <body data-vertical="desktop" data-app="home" data-chrome="visible">
@@ -121,6 +153,7 @@
 <header class="titlebar" id="titlebar">
   <span class="app-name" id="titleAppName"></span>
   <span class="spacer"></span>
+  <button class="chip" id="chipChrono" title="Chrono sandbox: snapshots, rewinds, forks">⏱ Chrono</button>
   <button class="chip" id="chipTerminal" title="Summon TerminalOne">Terminal</button>
   <button class="chip" id="chipBrowser" title="Open Chrome with Floyd TTY Bridge">Browser</button>
   <button class="chip" id="chipBg" title="Cycle background">BG</button>
@@ -140,6 +173,40 @@
 
 <div class="splash" id="splash"><div class="boot">FLOYD · BOOTING</div></div>
 <div class="hint">hover the left edge · apps drawer</div>
+
+<aside class="chrono" id="chronoPanel" aria-label="Chrono sandbox">
+  <div class="chrono-head">
+    <strong>⏱ CHRONO</strong>
+    <select id="chronoSurface" title="Target surface repo"></select>
+    <button class="chip" id="chronoClose">×</button>
+  </div>
+  <div class="chrono-body">
+    <section>
+      <h3>Timeline</h3>
+      <div class="chrono-row" style="margin-bottom:8px">
+        <input id="snapMsg" placeholder="snapshot message (optional)" maxlength="120">
+        <button class="cbtn" id="btnSnapshot">Snapshot</button>
+      </div>
+      <div class="timeline" id="chronoTimeline"></div>
+    </section>
+    <section>
+      <h3>Forks (parallel timelines)</h3>
+      <div class="chrono-row" style="margin-bottom:8px">
+        <input id="forkNames" placeholder="names: model-a, model-b" maxlength="120">
+        <button class="cbtn" id="btnFork">Fork</button>
+      </div>
+      <div id="chronoForks" style="display:flex;flex-direction:column;gap:8px"></div>
+    </section>
+    <section>
+      <h3>Ledger</h3>
+      <div id="chronoLedger" class="timeline"></div>
+    </section>
+    <section>
+      <h3>Output</h3>
+      <div class="chrono-out" id="chronoOut"></div>
+    </section>
+  </div>
+</aside>
 <div class="toast" id="toast" role="alert"></div>
 
 <script type="module">
@@ -249,7 +316,9 @@ async function openApp(id) {
       const port = r.port ?? new URL(app.target).port;
       // Remote (tailnet) visitors cannot reach 127.0.0.1 on this machine —
       // route through the Tailscale-served HTTPS port for the same host.
-      const remote = !["127.0.0.1", "localhost", "::1", ""].includes(location.hostname);
+      // Any *.localhost name (e.g. floyd.localhost) is local by definition.
+      const h = location.hostname;
+      const remote = !(["127.0.0.1", "localhost", "::1", ""].includes(h) || h.endsWith(".localhost"));
       frame.src = remote && app.remote_port
         ? `https://${location.hostname}:${app.remote_port}/`
         : (app.kind === "terminal" ? `http://127.0.0.1:${port}/` : app.target);
@@ -286,8 +355,22 @@ function appButton(app) {
   btn.className = `app ${up ? "up" : ""} ${state.activeApp === app.id ? "active" : ""}`;
   btn.style.setProperty("--app-accent", app.accent || "#22d3ee");
   btn.innerHTML = `<div class="app-icon">${initials}<span class="app-dot"></span></div>
-    <div class="app-meta"><strong>${app.name}</strong><span>${app.subtitle ?? ""}</span></div>`;
+    <div class="app-meta"><strong>${app.name}</strong><span>${app.subtitle ?? ""}</span></div>
+    <span class="app-quit" title="Quit ${app.name}" role="button">×</span>`;
   btn.addEventListener("click", () => openApp(app.id));
+  btn.querySelector(".app-quit").addEventListener("click", async (e) => {
+    e.stopPropagation();
+    if (!confirm(`Quit ${app.name}? Its session state will be lost.`)) return;
+    try {
+      const r = await (await fetch(`/api/quit/${app.id}`, { method: "POST" })).json();
+      if (!r.quit) throw new Error(r.error || "quit failed");
+      const frame = state.frames.get(app.id);
+      if (frame) { frame.remove(); state.frames.delete(app.id); }
+      if (state.activeApp === app.id) activate("home");
+      state.status[app.id] = { ...(state.status[app.id] || {}), up: false };
+      renderNav();
+    } catch (err) { toast(err); }
+  });
   return btn;
 }
 function renderNav() {
@@ -321,6 +404,109 @@ drawer.addEventListener("focusout", (e) => { if (!drawer.contains(e.relatedTarge
 
 /* ---- titlebar chips ---- */
 el("chipHome").addEventListener("click", () => activate("home"));
+
+/* ---- chrono sandbox panel ---- */
+const chrono = {
+  panel: el("chronoPanel"), surface: () => el("chronoSurface").value,
+  busy: false,
+};
+async function chronoCall(op, params = {}, method = "POST") {
+  if (chrono.busy) return null;
+  chrono.busy = true;
+  document.querySelectorAll(".cbtn").forEach((b) => (b.disabled = true));
+  try {
+    const qs = new URLSearchParams(params).toString();
+    const r = await fetch(`/api/chrono/${chrono.surface()}/${op}${qs ? "?" + qs : ""}`, { method });
+    const out = await r.json();
+    el("chronoOut").textContent = JSON.stringify(out, null, 1).slice(0, 3000);
+    return out;
+  } catch (e) { el("chronoOut").textContent = String(e); return null; }
+  finally {
+    chrono.busy = false;
+    document.querySelectorAll(".cbtn").forEach((b) => (b.disabled = false));
+  }
+}
+async function chronoRefresh() {
+  const s = chrono.surface();
+  if (!s) return;
+  const [log, forks, ledger] = await Promise.all([
+    fetch(`/api/chrono/${s}/log?n=12`).then((r) => r.json()).catch(() => null),
+    fetch(`/api/chrono/${s}/forks`).then((r) => r.json()).catch(() => null),
+    fetch(`/api/chrono/${s}/ledger?n=8`).then((r) => r.json()).catch(() => null),
+  ]);
+  const tl = el("chronoTimeline"); tl.replaceChildren();
+  (log?.commits ?? []).forEach((c, i) => {
+    const d = document.createElement("div");
+    d.className = "tl-item";
+    d.innerHTML = `<span class="sha" title="Rewind to ${c.sha}">${c.sha}</span><span class="t">${c.time}</span><span class="s"></span>`;
+    d.querySelector(".s").textContent = c.subject;
+    d.querySelector(".sha").addEventListener("click", async () => {
+      if (!confirm(`Rewind ${chrono.surface()} to ${c.sha}?\n\n“${c.subject}”\n\nA safety snapshot is taken first, so this is reversible.`)) return;
+      await chronoCall("rewind", { to: c.sha });
+      chronoRefresh();
+    });
+    tl.appendChild(d);
+  });
+  const fl = el("chronoForks"); fl.replaceChildren();
+  const forkList = forks?.forks ?? [];
+  if (!forkList.length) fl.innerHTML = `<span style="font:11px ui-monospace,monospace;color:var(--faint)">no live forks</span>`;
+  forkList.forEach((f) => {
+    const d = document.createElement("div");
+    d.className = "fork-item";
+    d.innerHTML = `<div class="frow"><span class="fname">${f.name}</span><span class="fstat">${f.dirty ? "dirty" : "clean"} · ${f.diffstat}</span></div>
+      <div class="frow"><button class="cbtn" data-act="diff">Diff</button><button class="cbtn" data-act="merge">Merge as winner</button><button class="cbtn danger" data-act="prune">Prune</button></div>`;
+    d.querySelector('[data-act="diff"]').addEventListener("click", async () => {
+      const r = await fetch(`/api/chrono/${chrono.surface()}/diff?name=${f.name}`).then((x) => x.json());
+      el("chronoOut").textContent = r.diff ? r.diff.slice(0, 4000) : JSON.stringify(r, null, 1);
+    });
+    d.querySelector('[data-act="merge"]').addEventListener("click", async () => {
+      if (!confirm(`Merge fork “${f.name}” into ${chrono.surface()} and prune ALL other forks?`)) return;
+      await chronoCall("merge-winner", { name: f.name });
+      chronoRefresh();
+    });
+    d.querySelector('[data-act="prune"]').addEventListener("click", async () => {
+      if (!confirm(`Discard fork “${f.name}”? Its uncommitted work is lost.`)) return;
+      await chronoCall("prune", { name: f.name });
+      chronoRefresh();
+    });
+    fl.appendChild(d);
+  });
+  const lg = el("chronoLedger"); lg.replaceChildren();
+  (ledger?.entries ?? []).slice().reverse().forEach((e) => {
+    const d = document.createElement("div");
+    d.className = "tl-item";
+    d.innerHTML = `<span class="t">${(e.ts || "").slice(11)}</span><span class="s"></span>`;
+    d.querySelector(".s").textContent = `${e.op}${e.winner ? " → " + e.winner : ""}${e.forks ? " [" + e.forks.join(", ") + "]" : ""}`;
+    lg.appendChild(d);
+  });
+}
+async function chronoInit() {
+  const r = await fetch("/api/chrono/surfaces").then((x) => x.json()).catch(() => null);
+  if (!r?.ok) return;
+  const sel = el("chronoSurface");
+  sel.replaceChildren(...Object.entries(r.surfaces).filter(([, v]) => v.git).map(([name]) => {
+    const o = document.createElement("option"); o.value = name; o.textContent = name; return o;
+  }));
+  sel.addEventListener("change", chronoRefresh);
+}
+el("chipChrono").addEventListener("click", () => {
+  chrono.panel.classList.toggle("open");
+  if (chrono.panel.classList.contains("open")) chronoRefresh();
+});
+el("chronoClose").addEventListener("click", () => chrono.panel.classList.remove("open"));
+el("btnSnapshot").addEventListener("click", async () => {
+  await chronoCall("snapshot", el("snapMsg").value ? { message: el("snapMsg").value } : {});
+  el("snapMsg").value = "";
+  chronoRefresh();
+});
+el("btnFork").addEventListener("click", async () => {
+  const names = el("forkNames").value.trim();
+  if (!names) return toast("Name the forks: model-a, model-b");
+  await chronoCall("fork", { names });
+  el("forkNames").value = "";
+  chronoRefresh();
+});
+chronoInit();
 el("chipBg").addEventListener("click", cycleBackground);
 el("chipTerminal").addEventListener("click", () => openApp("terminalone"));
 el("chipBrowser").addEventListener("click", async () => {
