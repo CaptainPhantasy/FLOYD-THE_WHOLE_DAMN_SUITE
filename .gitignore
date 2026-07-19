@@ -19,3 +19,4 @@ intake/
 *.tsbuildinfo
 dist-types/
 .supercache
+apps/frame/server/heartbeat.json
