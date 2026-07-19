@@ -26,7 +26,13 @@ const PORT = Number(process.env.FRAME_PORT || 13030);
 // ---- managed process table -------------------------------------------------
 // Every app the frame can own. Terminal apps get their own TerminalOne server
 // whose SHELL is a wrapper that execs the CLI, so the frame shows it pre-open.
-const PTY_COPY = "/Volumes/Storage/FLOYD_WORKSTATION/intake/surfaces/pty";
+// All apps run from monorepo copies under intake/surfaces/ — originals
+// elsewhere on disk are never touched by the frame.
+const SURFACES = "/Volumes/Storage/FLOYD_WORKSTATION/intake/surfaces";
+const PTY_COPY = join(SURFACES, "pty");
+// One node for everything: homebrew node (native modules in the copies are
+// built against it). No per-service pins.
+const NODE_BIN = "/opt/homebrew/bin/node";
 const WRAPPER_DIR = join(FRAME_DIR, "server", "shells");
 mkdirSync(WRAPPER_DIR, { recursive: true });
 mkdirSync(BACKGROUNDS_DIR, { recursive: true });
@@ -40,36 +46,40 @@ function wrapperFor(id, execLine) {
 const MANAGED = {
   "cursem-ide": {
     port: 13020,
-    cwd: "/Volumes/applebottom/CURSEM-IDE",
-    cmd: "node", args: ["server/cursem-server.mjs"],
+    cwd: join(SURFACES, "ide"),
+    cmd: NODE_BIN, args: ["server/cursem-server.mjs"],
     env: { CURSEM_PORT: "13020" },
   },
   "floyd-desktop": {
     port: 13021,
-    cwd: "/Volumes/Storage/FloydDesktopWeb-Standalone",
-    cmd: "node", args: ["dist-server/index.js"],
+    cwd: join(SURFACES, "desktop"),
+    cmd: NODE_BIN, args: ["dist-server/index.js"],
     env: { PORT: "13021" },
   },
   "harness-launcher": {
     port: 11000,
-    cwd: "/Volumes/Storage/harness-launcher",
-    // node-pty here is compiled for the homebrew node, not /usr/local/bin/node.
-    cmd: "/opt/homebrew/bin/node", args: ["src/server.js"],
+    cwd: join(SURFACES, "launcher"),
+    cmd: NODE_BIN, args: ["src/server.js"],
     env: { PORT: "11000", HOST: "127.0.0.1" },
   },
   "floyd-code-cli": {
     port: 13022,
     cwd: PTY_COPY,
-    // node-pty native module in the admitted copy is compiled for the launchd
-    // node at /usr/local/bin/node — pin it, do not use the frame's node.
-    cmd: "/usr/local/bin/node", args: ["src/server.js"],
+    cmd: NODE_BIN, args: ["src/server.js"],
     env: () => ({ PORT: "13022", SHELL: wrapperFor("floyd-code-cli", "/Users/douglastalley/.local/bin/ff") }),
   },
   "ohmyfloyd": {
     port: 13023,
     cwd: PTY_COPY,
-    cmd: "/usr/local/bin/node", args: ["src/server.js"],
+    cmd: NODE_BIN, args: ["src/server.js"],
     env: () => ({ PORT: "13023", SHELL: wrapperFor("ohmyfloyd", "/usr/local/bin/floydcode") }),
+  },
+  "terminalone": {
+    port: 13013,
+    cwd: PTY_COPY,
+    cmd: NODE_BIN, args: ["src/server.js"],
+    // Plain shell — no SHELL override, TerminalOne falls back to zsh.
+    env: { PORT: "13013", TERMINALONE_ALLOWED_ORIGIN: "http://127.0.0.1:13013" },
   },
 };
 
