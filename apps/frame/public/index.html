@@ -19,7 +19,8 @@
   /* ---------- background stage (the base frame is nothing but this) ---------- */
   .stage { position: fixed; inset: 0; }
   .stage-bg { position: absolute; inset: 0; background: var(--bg) center / contain no-repeat; transition: background-image .4s ease, opacity .4s ease; }
-  .stage-frame { position: absolute; inset: 0; border: 0; width: 100%; height: 100%; background: transparent; display: none; }
+  /* Opaque surface: background art must never show through a loaded app. */
+  .stage-frame { position: absolute; inset: 0; border: 0; width: 100%; height: 100%; background: var(--bg); display: none; }
   .stage-frame.active { display: block; }
 
   /* ---------- spring-loaded hover drawer ---------- */
@@ -84,18 +85,27 @@
   body:not([data-app="home"]) .hint { display: none; }
   .toast { position: fixed; z-index: 60; right: 16px; bottom: 16px; max-width: 420px; background: var(--panel-2); border: 1px solid #7f1d1d; border-radius: 9px; padding: 10px 13px; font: 12px ui-monospace, monospace; display: none; }
   .toast.show { display: block; }
+  /* Full-screen loading is only used when NOTHING is on stage (home -> app).
+     Once any app is visible, launches use the corner chip instead so no
+     background art ever obstructs a loaded app. */
   .loading { position: fixed; z-index: 20; inset: 0; display: none; place-items: center; color: var(--text); font: 12px ui-monospace, monospace; letter-spacing: .12em;
-    background: #08090c url(/backgrounds/sweet-ecosystem.png) center / contain no-repeat; }
+    background: #08090c center / contain no-repeat; }
   .loading span { background: rgba(8,9,12,.72); border: 1px solid var(--line); border-radius: 9px; padding: 8px 16px; }
   .loading.show { display: grid; }
+  .loading.corner { inset: auto 16px 16px auto; display: none; background: var(--panel-2); border: 1px solid var(--line); border-radius: 9px; padding: 8px 14px; z-index: 60; }
+  .loading.corner.show { display: block; }
+  .loading.corner span { background: none; border: 0; padding: 0; }
 
   /* ---------- splash (initial boot) ---------- */
   .splash { position: fixed; z-index: 100; inset: 0; display: grid; place-items: end center;
-    background: #08090c url(/backgrounds/sweet-ecosystem.png) center / contain no-repeat;
-    transition: opacity .6s ease; }
+    background: #08090c center / contain no-repeat;
+    transition: opacity .9s ease; }
   .splash.gone { opacity: 0; pointer-events: none; }
   .splash .boot { margin-bottom: 6vh; color: var(--muted); font: 12px ui-monospace, monospace; letter-spacing: .18em; text-transform: uppercase;
-    background: rgba(8,9,12,.72); border: 1px solid var(--line); border-radius: 9px; padding: 8px 16px; }
+    background: rgba(8,9,12,.72); border: 1px solid var(--line); border-radius: 9px; padding: 8px 16px;
+    display: flex; align-items: center; gap: 10px; }
+  .splash .boot::after { content: ""; width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--faint); border-top-color: var(--accent); animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
 </style>
 </head>
 <body data-vertical="desktop" data-app="home" data-chrome="visible">
@@ -134,7 +144,18 @@
 <script type="module">
 /* ============ shared logic layer (never forked per vertical) ============ */
 const el = (id) => document.getElementById(id);
-const DEFAULT_BG = "sweet-ecosystem.png";
+/* The two Sweet Ecosystem banners alternate across splash, loads, switches
+   and home background so the art stays fresh without ever repeating twice. */
+const SWEET = ["sweet-ecosystem.png", "sweet-ecosystem-2.png"];
+let sweetIdx = Number(localStorage.getItem("floyd.sweetIdx") || 0) % SWEET.length;
+function nextSweet() {
+  sweetIdx = (sweetIdx + 1) % SWEET.length;
+  localStorage.setItem("floyd.sweetIdx", sweetIdx);
+  return SWEET[sweetIdx];
+}
+const BOOT_T0 = Date.now();
+const MIN_SPLASH_MS = 2200;
+const DEFAULT_BG = SWEET[sweetIdx];
 const state = {
   registry: [], status: {}, backgrounds: [], bgFile: localStorage.getItem("floyd.bgFile") || DEFAULT_BG,
   activeApp: localStorage.getItem("floyd.activeApp") || "home",
@@ -195,6 +216,17 @@ function cycleBackground() {
 }
 
 /* ---- app launching: iframes persist so context is never lost on switch ---- */
+function setLoading(on) {
+  const box = el("loading");
+  if (!on) { box.classList.remove("show"); return; }
+  // Nothing on stage -> full-screen art (alternating). An app already visible
+  // -> corner chip only, so backgrounds never obstruct a loaded app.
+  const anyVisible = [...state.frames.values()].some((f) => f.classList.contains("active"));
+  box.classList.toggle("corner", anyVisible);
+  if (!anyVisible) box.style.backgroundImage = `url(/backgrounds/${encodeURIComponent(nextSweet())})`;
+  else box.style.backgroundImage = "";
+  box.classList.add("show");
+}
 async function openApp(id) {
   if (id === "home") return activate("home");
   const app = state.registry.find((a) => a.id === id);
@@ -204,7 +236,7 @@ async function openApp(id) {
     catch (e) { toast(e); }
     return;
   }
-  el("loading").classList.add("show");
+  setLoading(true);
   try {
     const r = await (await fetch(`/api/launch/${id}`, { method: "POST" })).json();
     if (r.managed && !r.up) throw new Error(`${app.name}: ${r.error || "failed to start"}`);
@@ -222,10 +254,16 @@ async function openApp(id) {
         : (app.kind === "terminal" ? `http://127.0.0.1:${port}/` : app.target);
       el("frames").appendChild(frame);
       state.frames.set(id, frame);
+      // Wait for the app to actually render before revealing it — landing on a
+      // blank, still-loading surface feels broken. Cap the wait at 8s.
+      await new Promise((done) => {
+        frame.addEventListener("load", done, { once: true });
+        setTimeout(done, 8000);
+      });
     }
     activate(id);
   } catch (e) { toast(e); }
-  finally { el("loading").classList.remove("show"); }
+  finally { setLoading(false); }
 }
 function activate(id) {
   state.activeApp = id;
@@ -234,6 +272,8 @@ function activate(id) {
   for (const [fid, frame] of state.frames) frame.classList.toggle("active", fid === id);
   const app = state.registry.find((a) => a.id === id);
   el("titleAppName").textContent = app ? app.name : "";
+  // Returning home: rotate the stage art so the backdrop alternates too.
+  if (id === "home") { state.bgFile = nextSweet(); localStorage.setItem("floyd.bgFile", state.bgFile); applyBackground(); }
   renderNav();
 }
 
@@ -303,12 +343,20 @@ addEventListener("keydown", (e) => {
 });
 
 applyVertical();
+/* Splash art: alternate between the two banners on every boot. */
+el("splash").style.backgroundImage = `url(/backgrounds/${encodeURIComponent(SWEET[sweetIdx])})`;
 loadRegistry()
-  .then(() => { if (state.activeApp !== "home") openApp(state.activeApp); })
+  .then(() => (state.activeApp !== "home" ? openApp(state.activeApp) : null))
   .catch((e) => toast(e))
   .finally(() => {
-    const splash = el("splash");
-    setTimeout(() => { splash.classList.add("gone"); setTimeout(() => splash.remove(), 700); }, 400);
+    // Hold the splash until the restored app is genuinely on screen AND the
+    // minimum display time has passed — no rushed cut, no half-loaded landing.
+    const remaining = Math.max(0, MIN_SPLASH_MS - (Date.now() - BOOT_T0));
+    setTimeout(() => {
+      const splash = el("splash");
+      splash.classList.add("gone");
+      setTimeout(() => splash.remove(), 1000);
+    }, remaining);
   });
 </script>
 </body>
