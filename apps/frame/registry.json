@@ -8,7 +8,8 @@
       "subtitle": "Terminal · CLI · Shell",
       "kind": "terminal",
       "command": "ff",
-      "accent": "#22d3ee"
+      "accent": "#22d3ee",
+      "remote_port": 8454
     },
     {
       "id": "cursem-ide",
@@ -17,7 +18,8 @@
       "kind": "url",
       "target": "http://127.0.0.1:13020/",
       "health": "http://127.0.0.1:13020/",
-      "accent": "#a855f7"
+      "accent": "#a855f7",
+      "remote_port": 8451
     },
     {
       "id": "floyd-desktop",
@@ -26,7 +28,8 @@
       "kind": "url",
       "target": "http://127.0.0.1:13021/",
       "health": "http://127.0.0.1:13021/",
-      "accent": "#3b82f6"
+      "accent": "#3b82f6",
+      "remote_port": 8452
     },
     {
       "id": "ohmyfloyd",
@@ -34,7 +37,8 @@
       "subtitle": "Coding Agent · floydcode",
       "kind": "terminal",
       "command": "floydcode",
-      "accent": "#ec4899"
+      "accent": "#ec4899",
+      "remote_port": 8455
     },
     {
       "id": "harness-launcher",
@@ -43,7 +47,8 @@
       "kind": "url",
       "target": "http://127.0.0.1:11000/",
       "health": "http://127.0.0.1:11000/",
-      "accent": "#f59e0b"
+      "accent": "#f59e0b",
+      "remote_port": 8453
     },
     {
       "id": "terminalone",
@@ -52,7 +57,8 @@
       "kind": "url",
       "target": "http://127.0.0.1:13013/",
       "health": "http://127.0.0.1:13013/health",
-      "accent": "#34d399"
+      "accent": "#34d399",
+      "remote_port": 8456
     },
     {
       "id": "browser",

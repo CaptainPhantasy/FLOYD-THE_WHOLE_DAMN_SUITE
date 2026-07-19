@@ -197,7 +197,12 @@ async function openApp(id) {
       frame.className = "stage-frame";
       frame.title = app.name;
       const port = r.port ?? new URL(app.target).port;
-      frame.src = app.kind === "terminal" ? `http://127.0.0.1:${port}/` : app.target;
+      // Remote (tailnet) visitors cannot reach 127.0.0.1 on this machine —
+      // route through the Tailscale-served HTTPS port for the same host.
+      const remote = !["127.0.0.1", "localhost", "::1", ""].includes(location.hostname);
+      frame.src = remote && app.remote_port
+        ? `https://${location.hostname}:${app.remote_port}/`
+        : (app.kind === "terminal" ? `http://127.0.0.1:${port}/` : app.target);
       el("frames").appendChild(frame);
       state.frames.set(id, frame);
     }
