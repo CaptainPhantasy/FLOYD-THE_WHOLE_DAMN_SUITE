@@ -88,20 +88,21 @@
   /* Full-screen loading is only used when NOTHING is on stage (home -> app).
      Once any app is visible, launches use the corner chip instead so no
      background art ever obstructs a loaded app. */
-  .loading { position: fixed; z-index: 20; inset: 0; display: none; place-items: center; color: var(--text); font: 12px ui-monospace, monospace; letter-spacing: .12em;
+  .loading { position: fixed; z-index: 20; inset: 0; display: none; color: var(--text); font: 12px ui-monospace, monospace; letter-spacing: .12em;
     background: #08090c center / contain no-repeat; }
-  .loading span { background: rgba(8,9,12,.72); border: 1px solid var(--line); border-radius: 9px; padding: 8px 16px; }
-  .loading.show { display: grid; }
+  .loading span { position: absolute; right: 16px; bottom: 16px; background: rgba(8,9,12,.72); border: 1px solid var(--line); border-radius: 9px; padding: 8px 16px; }
+  .loading.show { display: block; }
   .loading.corner { inset: auto 16px 16px auto; display: none; background: var(--panel-2); border: 1px solid var(--line); border-radius: 9px; padding: 8px 14px; z-index: 60; }
   .loading.corner.show { display: block; }
-  .loading.corner span { background: none; border: 0; padding: 0; }
+  .loading.corner span { position: static; background: none; border: 0; padding: 0; }
 
   /* ---------- splash (initial boot) ---------- */
-  .splash { position: fixed; z-index: 100; inset: 0; display: grid; place-items: end center;
+  .splash { position: fixed; z-index: 100; inset: 0; display: block;
     background: #08090c center / contain no-repeat;
     transition: opacity .9s ease; }
   .splash.gone { opacity: 0; pointer-events: none; }
-  .splash .boot { margin-bottom: 6vh; color: var(--muted); font: 12px ui-monospace, monospace; letter-spacing: .18em; text-transform: uppercase;
+  /* Corner chip, off the artwork — never centered over the banner. */
+  .splash .boot { position: absolute; right: 16px; bottom: 16px; color: var(--muted); font: 12px ui-monospace, monospace; letter-spacing: .18em; text-transform: uppercase;
     background: rgba(8,9,12,.72); border: 1px solid var(--line); border-radius: 9px; padding: 8px 16px;
     display: flex; align-items: center; gap: 10px; }
   .splash .boot::after { content: ""; width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--faint); border-top-color: var(--accent); animation: spin 1s linear infinite; }
