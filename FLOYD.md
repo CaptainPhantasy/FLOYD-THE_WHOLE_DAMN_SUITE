@@ -44,3 +44,16 @@ durable authority.
 Label work as proposed, implemented, or runtime-verified. A test must show real
 command output before claiming pass. Every implementation turn ends with exact
 changes, commands, output, verification, and remaining work.
+
+## Claimed ports (recorded in /Volumes/SanDisk1Tb/SSOT/port-registry.json)
+
+| Port | Service |
+|---|---|
+| 13030 | FLOYD frame shell server |
+| 13020 | cursem-ide (frame-managed, intake/surfaces/ide) |
+| 13021 | floyd-desktop (frame-managed, intake/surfaces/desktop) |
+| 13022 | floyd-code-cli (frame-managed pty copy, SHELL=ff) |
+| 13023 | ohmyfloyd (frame-managed pty copy, SHELL=floydcode) |
+| 13013 | terminalone (pre-existing claim, frame-managed) |
+| 11000 | harness-launcher (pre-existing claim, frame-managed) |
+| 8451-8455 | Tailscale-serve HTTPS remote ports for the five iframe apps |
