@@ -31,12 +31,14 @@ in-app browser affordance.
   MCP-GATEWAY route to the native-browser-control / CDP server. One browser,
   N drivers, human always able to see what the agent is doing.
 - **Permanent extensions (mandate 2026-07-20):** every internal browser launch
-  MUST load both `/Volumes/SanDisk1Tb/open-anvil/extension` (Open Anvil —
-  Agent Pilot) and `/Volumes/Storage/Floyd TTY Bridge for Chrome/extension`
-  (Floyd's Labs TTY Bridge). A launch that cannot load both is an error, not a
-  degraded browser. The internal browser runs on its own persistent profile at
-  `FLOYD_RUNTIME/internal-browser-profile` so `--load-extension` always
-  applies and its state survives independent of the human's Chrome.
+  MUST load both Open Anvil — Agent Pilot and Floyd's Labs TTY Bridge. The
+  frame loads ONLY the monorepo copies at `intake/extensions/open-anvil` and
+  `intake/extensions/floyd-tty-bridge` (no symlinks; refresh from the
+  originals via `scripts/refresh-extension-copies.sh`). A launch that cannot
+  load both is an error, not a degraded browser. The internal browser runs on
+  its own persistent profile at `FLOYD_RUNTIME/internal-browser-profile` so
+  `--load-extension` always applies and its state survives independent of the
+  human's Chrome.
 
 **Files:** `apps/frame/registry.json` (schema: add `kind: overlay`),
 `apps/frame/public/index.html` (overlay layer + button),

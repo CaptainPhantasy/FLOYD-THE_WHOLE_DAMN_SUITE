@@ -122,9 +122,13 @@ async function ensureApp(id) {
 
 // Internal browser: these extensions are PERMANENT. Every launch loads them;
 // a launch that cannot load both is an error, not a degraded browser.
+// Monorepo copies under intake/extensions/ — originals elsewhere on disk are
+// never touched or depended on by the frame (no symlinks; refresh via
+// scripts/refresh-extension-copies.sh).
+const EXTENSIONS_DIR = join(FRAME_DIR, "..", "..", "intake", "extensions");
 const INTERNAL_EXTENSIONS = [
-  "/Volumes/SanDisk1Tb/open-anvil/extension",
-  "/Volumes/Storage/Floyd TTY Bridge for Chrome/extension",
+  join(EXTENSIONS_DIR, "open-anvil"),
+  join(EXTENSIONS_DIR, "floyd-tty-bridge"),
 ];
 // Dedicated profile so --load-extension always applies (Chrome ignores flags
 // when reusing an already-running instance on the default profile) and the
