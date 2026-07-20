@@ -53,9 +53,9 @@
   .app-meta span { display: block; font-size: 11px; color: var(--muted); white-space: nowrap; }
   .drawer-foot { padding: 10px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; }
 
-  /* stage shifts with the drawer edge in desktop */
+  /* stage shifts with the drawer edge in tablet; desktop chrome fully hides */
   .stage { left: 0; transition: left .45s var(--spring); }
-  body[data-vertical="desktop"] .stage, body[data-vertical="tablet"] .stage { left: var(--drawer-closed); }
+  body[data-vertical="tablet"] .stage { left: var(--drawer-closed); }
 
   .titlebar { position: fixed; z-index: 30; top: 0; right: 0; left: var(--drawer-closed); height: 44px;
     display: flex; align-items: center; gap: 10px; padding: 0 14px;
@@ -66,6 +66,16 @@
   .chip { border: 1px solid var(--line); background: transparent; color: var(--muted); border-radius: 7px; padding: 5px 11px; font: 12px ui-monospace, monospace; cursor: pointer; }
   .chip:hover { color: var(--text); border-color: var(--faint); }
   body[data-chrome="hidden"] .titlebar { opacity: 0; pointer-events: none; }
+
+  /* ---------- desktop: all chrome vanishes until the pointer hovers an edge ---------- */
+  body[data-vertical="desktop"] .drawer { transform: translateX(-105%); transition: transform .45s var(--spring), width .45s var(--spring); }
+  body[data-vertical="desktop"] .drawer.open { transform: none; }
+  body[data-vertical="desktop"] .titlebar { left: 0; transform: translateY(-105%); transition: transform .45s var(--spring), left .45s var(--spring), opacity .3s ease; }
+  body[data-vertical="desktop"] .titlebar.reveal { transform: none; }
+  .edge-hot { position: fixed; z-index: 46; display: none; background: transparent; }
+  body[data-vertical="desktop"] .edge-hot { display: block; }
+  #edgeLeft { top: 0; bottom: 0; left: 0; width: 12px; }
+  #edgeTop { top: 0; left: 0; right: 0; height: 10px; }
   body[data-app="home"] .titlebar { opacity: 0; pointer-events: none; }
 
   /* ---------- mobile vertical: bottom nav, no hover ---------- */
@@ -160,6 +170,8 @@
   <button class="chip" id="chipHome" title="Back to the frame">Home</button>
 </header>
 
+<div class="edge-hot" id="edgeLeft" aria-hidden="true"></div>
+<div class="edge-hot" id="edgeTop" aria-hidden="true"></div>
 <nav class="drawer" id="drawer" aria-label="Floyd apps">
   <div class="drawer-head"><div class="mark">F</div><div class="wordmark">FLOYD LABS</div></div>
   <div class="apps" id="appList"></div>
@@ -415,6 +427,14 @@ drawer.addEventListener("click", (e) => { if (document.body.dataset.vertical ===
 document.addEventListener("click", (e) => { if (document.body.dataset.vertical === "tablet" && !drawer.contains(e.target)) drawer.classList.remove("open"); });
 drawer.addEventListener("focusin", () => drawer.classList.add("open"));
 drawer.addEventListener("focusout", (e) => { if (!drawer.contains(e.relatedTarget)) drawer.classList.remove("open"); });
+
+/* ---- desktop auto-hide chrome: invisible edge hotzones reveal, leaving hides ---- */
+const titlebar = el("titlebar");
+let titleTimer;
+el("edgeLeft").addEventListener("pointerenter", (e) => { if (e.pointerType === "mouse") { clearTimeout(closeTimer); drawer.classList.add("open"); } });
+el("edgeTop").addEventListener("pointerenter", (e) => { if (e.pointerType === "mouse") { clearTimeout(titleTimer); titlebar.classList.add("reveal"); } });
+titlebar.addEventListener("pointerenter", (e) => { if (e.pointerType === "mouse") clearTimeout(titleTimer); });
+titlebar.addEventListener("pointerleave", (e) => { if (e.pointerType === "mouse") titleTimer = setTimeout(() => titlebar.classList.remove("reveal"), 300); });
 
 /* ---- titlebar chips ---- */
 el("chipHome").addEventListener("click", () => activate("home"));
