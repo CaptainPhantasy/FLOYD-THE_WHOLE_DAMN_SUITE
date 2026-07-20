@@ -120,10 +120,30 @@ async function ensureApp(id) {
   return { id, managed: true, up: false, error: "did not open its port within 10s" };
 }
 
+// Internal browser: these extensions are PERMANENT. Every launch loads them;
+// a launch that cannot load both is an error, not a degraded browser.
+const INTERNAL_EXTENSIONS = [
+  "/Volumes/SanDisk1Tb/open-anvil/extension",
+  "/Volumes/Storage/Floyd TTY Bridge for Chrome/extension",
+];
+// Dedicated profile so --load-extension always applies (Chrome ignores flags
+// when reusing an already-running instance on the default profile) and the
+// internal browser's own state persists independent of the human's Chrome.
+const INTERNAL_BROWSER_PROFILE = "/Volumes/Storage/FLOYD_RUNTIME/internal-browser-profile";
+
 function openChrome(url) {
-  const ext = "/Volumes/Storage/Floyd TTY Bridge for Chrome/extension";
-  const args = ["-na", "Google Chrome", "--args", `--load-extension=${ext}`];
-  if (url) args.splice(3, 0, url);
+  const missing = INTERNAL_EXTENSIONS.filter((p) => !existsSync(join(p, "manifest.json")));
+  if (missing.length) {
+    return Promise.reject(new Error(`internal browser extensions missing: ${missing.join(", ")}`));
+  }
+  mkdirSync(INTERNAL_BROWSER_PROFILE, { recursive: true });
+  const args = [
+    "-na", "Google Chrome", "--args",
+    `--user-data-dir=${INTERNAL_BROWSER_PROFILE}`,
+    `--load-extension=${INTERNAL_EXTENSIONS.join(",")}`,
+    "--no-first-run", "--no-default-browser-check",
+  ];
+  if (url) args.push(url);
   return new Promise((done, fail) =>
     execFile("open", args, (err) => (err ? fail(err) : done(true))));
 }
@@ -273,8 +293,12 @@ const server = http.createServer(async (req, res) => {
     if (path === "/api/action/open-chrome" && req.method === "POST") {
       let body = ""; for await (const c of req) body += c;
       const target = body ? (JSON.parse(body).url ?? null) : null;
-      await openChrome(target);
-      return json(res, 200, { opened: true });
+      try {
+        await openChrome(target);
+      } catch (err) {
+        return json(res, 500, { opened: false, error: String(err?.message ?? err) });
+      }
+      return json(res, 200, { opened: true, extensions: INTERNAL_EXTENSIONS });
     }
     if (path === "/api/backgrounds" && req.method === "GET") return json(res, 200, { backgrounds: listBackgrounds() });
     if (path === "/api/backgrounds" && req.method === "POST") {
