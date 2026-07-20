@@ -51,7 +51,7 @@ const MANAGED = {
     env: {
       CURSEM_PORT: "13020",
       // Allow embedding ONLY by the frame's own origins (local + tailnet).
-      CURSEM_FRAME_ANCESTORS: "http://127.0.0.1:13030 http://localhost:13030 http://floyd.localhost:13030 https://douglass-mac-mini.tail58d565.ts.net:8450",
+      CURSEM_FRAME_ANCESTORS: "http://127.0.0.1:13030 http://localhost:13030 http://floyd.localhost:13030 https://douglass-mac-mini.tail58d565.ts.net:8450 https://douglass-mac-mini.tail58d565.ts.net:10041",
     },
   },
   "floyd-desktop": {
