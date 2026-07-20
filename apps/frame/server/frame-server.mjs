@@ -131,26 +131,92 @@ const INTERNAL_EXTENSIONS = [
   join(EXTENSIONS_DIR, "open-anvil"),
   join(EXTENSIONS_DIR, "floyd-tty-bridge"),
 ];
-// Dedicated profile so --load-extension always applies (Chrome ignores flags
-// when reusing an already-running instance on the default profile) and the
-// internal browser's own state persists independent of the human's Chrome.
+// Dedicated profile so the internal browser's state persists independent of
+// the human's Chrome, plus a fixed CDP port so the frame (and every agent via
+// the MCP gateway) can drive it.
 const INTERNAL_BROWSER_PROFILE = "/Volumes/Storage/FLOYD_RUNTIME/internal-browser-profile";
+const INTERNAL_BROWSER_CDP_PORT = 9223;
+const CHROME_BIN = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 
-function openChrome(url) {
-  const missing = INTERNAL_EXTENSIONS.filter((p) => !existsSync(join(p, "manifest.json")));
-  if (missing.length) {
-    return Promise.reject(new Error(`internal browser extensions missing: ${missing.join(", ")}`));
+function cdpHttp(pathName, method = "GET") {
+  return new Promise((done, fail) => {
+    const req = http.request({ host: "127.0.0.1", port: INTERNAL_BROWSER_CDP_PORT, path: pathName, method, timeout: 3000 }, (res) => {
+      let body = "";
+      res.on("data", (d) => (body += d));
+      res.on("end", () => { try { done(JSON.parse(body)); } catch (e) { fail(e); } });
+    });
+    req.on("error", fail);
+    req.on("timeout", () => req.destroy(new Error("CDP timeout")));
+    req.end();
+  });
+}
+
+/** Load both permanent extensions over CDP. Branded Chrome ships with
+ * --load-extension DISABLED (silently ignored since Chrome 137), so flag
+ * loading is a lie; Extensions.loadUnpacked is the only path that works.
+ * Idempotent: reloading an already-loaded path returns the same id. */
+async function loadInternalExtensions() {
+  const version = await cdpHttp("/json/version");
+  const ws = new WebSocket(version.webSocketDebuggerUrl);
+  await new Promise((done, fail) => { ws.onopen = done; ws.onerror = () => fail(new Error("CDP websocket failed")); });
+  let msgId = 0;
+  const pending = new Map();
+  ws.onmessage = (m) => {
+    const d = JSON.parse(m.data);
+    if (d.id && pending.has(d.id)) { pending.get(d.id)(d); pending.delete(d.id); }
+  };
+  const send = (method, params) => new Promise((done) => {
+    const id = ++msgId;
+    pending.set(id, done);
+    ws.send(JSON.stringify({ id, method, params }));
+  });
+  try {
+    const loaded = [];
+    for (const path of INTERNAL_EXTENSIONS) {
+      const res = await send("Extensions.loadUnpacked", { path });
+      if (!res.result?.id) throw new Error(`extension failed to load: ${path}: ${JSON.stringify(res.error ?? res)}`);
+      loaded.push({ path, id: res.result.id });
+    }
+    return loaded;
+  } finally {
+    ws.close();
   }
+}
+
+async function openChrome(url) {
+  const missing = INTERNAL_EXTENSIONS.filter((p) => !existsSync(join(p, "manifest.json")));
+  if (missing.length) throw new Error(`internal browser extensions missing: ${missing.join(", ")}`);
   mkdirSync(INTERNAL_BROWSER_PROFILE, { recursive: true });
-  const args = [
-    "-na", "Google Chrome", "--args",
-    `--user-data-dir=${INTERNAL_BROWSER_PROFILE}`,
-    `--load-extension=${INTERNAL_EXTENSIONS.join(",")}`,
-    "--no-first-run", "--no-default-browser-check",
-  ];
-  if (url) args.push(url);
-  return new Promise((done, fail) =>
-    execFile("open", args, (err) => (err ? fail(err) : done(true))));
+
+  // Reuse a live internal browser if its CDP port answers; otherwise launch.
+  let alive = false;
+  try { await cdpHttp("/json/version"); alive = true; } catch {}
+  if (!alive) {
+    const child = spawn(CHROME_BIN, [
+      `--user-data-dir=${INTERNAL_BROWSER_PROFILE}`,
+      `--remote-debugging-port=${INTERNAL_BROWSER_CDP_PORT}`,
+      "--enable-unsafe-extension-debugging",
+      "--no-first-run", "--no-default-browser-check",
+      ...(url ? [url] : []),
+    ], { detached: true, stdio: "ignore" });
+    child.unref();
+    let up = false;
+    for (let i = 0; i < 40; i++) {
+      try { await cdpHttp("/json/version"); up = true; break; } catch {}
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    if (!up) throw new Error("internal browser did not expose its CDP port within 10s");
+  } else if (url) {
+    await cdpHttp(`/json/new?${encodeURIComponent(url)}`, "PUT").catch(() => {});
+  }
+
+  // Extensions are mandatory: verify the actual load, not the launch.
+  const loaded = await loadInternalExtensions();
+  if (alive) {
+    // Surface the reused window for the human.
+    execFile("open", ["-a", "Google Chrome"], () => {});
+  }
+  return { cdpPort: INTERNAL_BROWSER_CDP_PORT, loaded };
 }
 
 // ---- chrono sandbox bridge -------------------------------------------------
@@ -299,11 +365,11 @@ const server = http.createServer(async (req, res) => {
       let body = ""; for await (const c of req) body += c;
       const target = body ? (JSON.parse(body).url ?? null) : null;
       try {
-        await openChrome(target);
+        const result = await openChrome(target);
+        return json(res, 200, { opened: true, ...result });
       } catch (err) {
         return json(res, 500, { opened: false, error: String(err?.message ?? err) });
       }
-      return json(res, 200, { opened: true, extensions: INTERNAL_EXTENSIONS });
     }
     if (path === "/api/backgrounds" && req.method === "GET") return json(res, 200, { backgrounds: listBackgrounds() });
     if (path === "/api/backgrounds" && req.method === "POST") {
