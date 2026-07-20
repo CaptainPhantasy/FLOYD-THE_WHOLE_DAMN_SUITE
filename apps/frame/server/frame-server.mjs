@@ -70,16 +70,18 @@ const MANAGED = {
     port: 13022,
     cwd: PTY_COPY,
     cmd: NODE_BIN, args: ["src/server.js"],
-    env: () => ({ PORT: "13022", SHELL: wrapperFor("floyd-code-cli", "/Users/douglastalley/.local/bin/ff") }),
+    // Runs the monorepo runtime copy (intake/surfaces/ff) — the launcher
+    // refreshes bin/ from the canonical install read-only, then execs it.
+    env: () => ({ PORT: "13022", SHELL: wrapperFor("floyd-code-cli", join(SURFACES, "ff", "launch.sh")) }),
   },
   "ohmyfloyd": {
     port: 13023,
     cwd: PTY_COPY,
     cmd: NODE_BIN, args: ["src/server.js"],
-    // Launch via the branding guard so upstream updates can't strip the Floyd
-    // home screen: it re-applies customizations/ overlays, rebuilds if needed,
-    // then execs floydcode.
-    env: () => ({ PORT: "13023", SHELL: wrapperFor("ohmyfloyd", "/Volumes/SanDisk1Tb/OhMyFloyd/customizations/floydcode-launch.sh") }),
+    // Runs the monorepo runtime copy (intake/surfaces/omf). The launcher first
+    // lets the canonical OhMyFloyd self-heal its Floyd branding (guard in its
+    // customizations/), refreshes bin/ from it read-only, then execs the copy.
+    env: () => ({ PORT: "13023", SHELL: wrapperFor("ohmyfloyd", join(SURFACES, "omf", "launch.sh")) }),
   },
   "terminalone": {
     port: 13013,
@@ -122,10 +124,9 @@ async function ensureApp(id) {
 
 // Internal browser: these extensions are PERMANENT. Every launch loads them;
 // a launch that cannot load both is an error, not a degraded browser.
-// Monorepo copies under intake/extensions/ — originals elsewhere on disk are
-// never touched or depended on by the frame (no symlinks; refresh via
-// scripts/refresh-extension-copies.sh).
-const EXTENSIONS_DIR = join(FRAME_DIR, "..", "..", "intake", "extensions");
+// Version-controlled copies live with the frame that loads them (no symlinks;
+// refresh from the originals via scripts/refresh-extension-copies.sh).
+const EXTENSIONS_DIR = join(FRAME_DIR, "extensions");
 const INTERNAL_EXTENSIONS = [
   join(EXTENSIONS_DIR, "open-anvil"),
   join(EXTENSIONS_DIR, "floyd-tty-bridge"),

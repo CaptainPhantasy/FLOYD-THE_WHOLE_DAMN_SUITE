@@ -60,6 +60,7 @@
   "publish": true,
   "allowLocalRemote": false,
   "allow": [
-    "^apps/frame/backgrounds/"
+    "^apps/frame/backgrounds/",
+    "^apps/frame/extensions/"
   ]
 }

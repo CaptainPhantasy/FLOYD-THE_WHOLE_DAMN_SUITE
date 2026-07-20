@@ -5,7 +5,7 @@
 set -eu
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-DEST="$ROOT/intake/extensions"
+DEST="$ROOT/apps/frame/extensions"
 
 copy() {
   src="$1"; dst="$DEST/$2"

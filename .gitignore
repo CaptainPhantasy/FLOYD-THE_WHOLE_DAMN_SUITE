@@ -20,3 +20,8 @@ intake/
 dist-types/
 .supercache
 apps/frame/server/heartbeat.json
+
+# Permanent internal-browser extensions are version-controlled in full,
+# including runtime node_modules the TTY Bridge sidepanel imports.
+!apps/frame/extensions/floyd-tty-bridge/node_modules/
+!apps/frame/extensions/floyd-tty-bridge/node_modules/**
