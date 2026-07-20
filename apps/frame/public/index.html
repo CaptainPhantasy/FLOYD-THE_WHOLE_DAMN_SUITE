@@ -237,9 +237,13 @@ function classify() {
   if (state.override) return state.override;
   const fine = matchMedia("(pointer: fine)").matches, hover = matchMedia("(hover: hover)").matches;
   if (fine && hover) return "desktop";
+  // Safari on macOS can fail the pointer/hover media queries even on a real
+  // desktop. A Mac UA with no multi-touch is a genuine desktop; a Mac UA
+  // WITH multi-touch is an iPad masquerading as a Mac (tablet).
+  const macUA = /Mac/.test(navigator.userAgent);
+  if (macUA && navigator.maxTouchPoints <= 1) return "desktop";
+  if (macUA) return "tablet";
   const smallest = Math.min(innerWidth, innerHeight);
-  const appleDesktopUA = /Mac/.test(navigator.userAgent) && navigator.maxTouchPoints > 1;
-  if (appleDesktopUA) return "tablet";
   return smallest >= 600 ? "tablet" : "mobile";
 }
 let classifyTimer;
