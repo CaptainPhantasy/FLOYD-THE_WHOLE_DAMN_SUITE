@@ -76,7 +76,10 @@ const MANAGED = {
     port: 13023,
     cwd: PTY_COPY,
     cmd: NODE_BIN, args: ["src/server.js"],
-    env: () => ({ PORT: "13023", SHELL: wrapperFor("ohmyfloyd", "/usr/local/bin/floydcode") }),
+    // Launch via the branding guard so upstream updates can't strip the Floyd
+    // home screen: it re-applies customizations/ overlays, rebuilds if needed,
+    // then execs floydcode.
+    env: () => ({ PORT: "13023", SHELL: wrapperFor("ohmyfloyd", "/Volumes/SanDisk1Tb/OhMyFloyd/customizations/floydcode-launch.sh") }),
   },
   "terminalone": {
     port: 13013,

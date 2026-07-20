@@ -356,11 +356,21 @@ function appButton(app) {
   btn.style.setProperty("--app-accent", app.accent || "#22d3ee");
   btn.innerHTML = `<div class="app-icon">${initials}<span class="app-dot"></span></div>
     <div class="app-meta"><strong>${app.name}</strong><span>${app.subtitle ?? ""}</span></div>
-    <span class="app-quit" title="Quit ${app.name}" role="button">×</span>`;
+    <span class="app-quit" title="Detach ${app.name} (state preserved). Shift-click to force quit." role="button">×</span>`;
   btn.addEventListener("click", () => openApp(app.id));
   btn.querySelector(".app-quit").addEventListener("click", async (e) => {
     e.stopPropagation();
-    if (!confirm(`Quit ${app.name}? Its session state will be lost.`)) return;
+    if (!e.shiftKey) {
+      // Detach: hide the plane, keep the iframe and server process alive.
+      // State is never lost; reopening re-attaches instantly.
+      if (state.activeApp === app.id) activate("home");
+      toast(`${app.name} detached. State preserved — click to return.`);
+      renderNav();
+      return;
+    }
+    // Force quit (shift-click): stops the managed server and frees its port.
+    // Durable work lives in Floyd Core, not the plane, so this is recoverable.
+    if (!confirm(`Force quit ${app.name}? The app will stop and free its port. Durable work is preserved in Floyd Core; unsaved in-plane scratch state ends with the process.`)) return;
     try {
       const r = await (await fetch(`/api/quit/${app.id}`, { method: "POST" })).json();
       if (!r.quit) throw new Error(r.error || "quit failed");
