@@ -40,7 +40,8 @@
   .app:hover { background: var(--panel-2); transform: translateX(2px); }
   .app.active { border-color: var(--app-accent, var(--accent)); background: var(--panel-2); }
   .app-icon { width: 38px; height: 38px; flex: 0 0 38px; border-radius: 9px; border: 1px solid var(--line); display: grid; place-items: center;
-    color: var(--app-accent, var(--accent)); font: 700 13px ui-monospace, monospace; background: #0b0d12; position: relative; }
+    color: var(--app-accent, var(--accent)); font: 700 13px ui-monospace, monospace; background: #0b0d12; position: relative; overflow: visible; }
+  .app-icon img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; border-radius: 8px; }
   .app-quit { display: none; margin-left: auto; flex: 0 0 22px; width: 22px; height: 22px; border-radius: 6px; border: 1px solid var(--line);
     background: transparent; color: var(--muted); font: 700 12px ui-monospace, monospace; cursor: pointer; place-items: center; }
   .drawer.open .app.up .app-quit { display: grid; }
@@ -370,7 +371,7 @@ function appButton(app) {
   const btn = document.createElement("button");
   btn.className = `app ${up ? "up" : ""} ${state.activeApp === app.id ? "active" : ""}`;
   btn.style.setProperty("--app-accent", app.accent || "#22d3ee");
-  btn.innerHTML = `<div class="app-icon">${initials}<span class="app-dot"></span></div>
+  btn.innerHTML = `<div class="app-icon">${initials}<img src="/assets/${app.id}.png" alt="" loading="lazy" onerror="this.remove()"><span class="app-dot"></span></div>
     <div class="app-meta"><strong>${app.name}</strong><span>${app.subtitle ?? ""}</span></div>
     <span class="app-quit" title="Detach ${app.name} (state preserved). Shift-click to force quit." role="button">×</span>`;
   btn.addEventListener("click", () => openApp(app.id));
@@ -407,7 +408,7 @@ function renderNav() {
   state.registry.slice(0, 4).forEach((app) => {
     const b = document.createElement("button");
     b.className = state.activeApp === app.id ? "active" : "";
-    b.innerHTML = `<span class="glyph">${app.name.replace(/FLOYD\s*/i, "").trim().slice(0, 1)}</span>${app.name.split(" ")[0]}`;
+    b.innerHTML = `<span class="glyph"><img src="/assets/${app.id}.png" alt="" loading="lazy" style="width:22px;height:22px;border-radius:6px;object-fit:cover" onerror="this.replaceWith('${app.name.replace(/FLOYD\s*/i, "").trim().slice(0, 1)}')"></span>${app.name.split(" ")[0]}`;
     b.addEventListener("click", () => openApp(app.id));
     nav.appendChild(b);
   });
