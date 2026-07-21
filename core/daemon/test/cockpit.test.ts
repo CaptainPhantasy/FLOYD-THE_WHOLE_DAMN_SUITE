@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-const html = readFileSync(join(import.meta.dirname, "../../../apps/cockpit/public/index.html"), "utf8");
+const html = readFileSync(join(import.meta.dirname, "../../../quarantine/cockpit/public/index.html"), "utf8");
 const browserSdk = readFileSync(join(import.meta.dirname, "../../../packages/sdk/browser/floyd-sdk.js"), "utf8");
 
 test("cockpit is a natural-language Core client without direct engine access", () => {

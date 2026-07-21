@@ -49,7 +49,7 @@ import type {
 } from "@floyd/contracts";
 
 const ROOT_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
-const COCKPIT_DIR = join(ROOT_DIR, "apps", "cockpit", "public");
+const COCKPIT_DIR = join(ROOT_DIR, "quarantine", "cockpit", "public");
 const BROWSER_SDK = join(ROOT_DIR, "packages", "sdk", "browser", "floyd-sdk.js");
 const SURFACE_MANIFEST = join(ROOT_DIR, "ecosystem", "surfaces.json");
 
