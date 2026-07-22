@@ -248,7 +248,10 @@ const toast = (msg) => { const t = el("toast"); t.textContent = String(msg); t.c
 /* ---- TVDS capability classification (capability-first, width tiebreaker) ---- */
 function classify() {
   if (state.override) return state.override;
-  const fine = matchMedia("(pointer: fine)").matches, hover = matchMedia("(hover: hover)").matches;
+  // Capability decides, never window size: a resized/non-fullscreen desktop
+  // browser window is still a desktop. any-pointer/any-hover so an attached
+  // touchscreen can't demote a mouse-driven machine.
+  const fine = matchMedia("(any-pointer: fine)").matches, hover = matchMedia("(any-hover: hover)").matches;
   if (fine && hover) return "desktop";
   // Safari on macOS can fail the pointer/hover media queries even on a real
   // desktop. A Mac UA with no multi-touch is a genuine desktop; a Mac UA
@@ -256,7 +259,8 @@ function classify() {
   const macUA = /Mac/.test(navigator.userAgent);
   if (macUA && navigator.maxTouchPoints <= 1) return "desktop";
   if (macUA) return "tablet";
-  const smallest = Math.min(innerWidth, innerHeight);
+  // Touch-only devices: physical screen size, not the window, picks the tier.
+  const smallest = Math.min(screen.width, screen.height);
   return smallest >= 600 ? "tablet" : "mobile";
 }
 let classifyTimer;
