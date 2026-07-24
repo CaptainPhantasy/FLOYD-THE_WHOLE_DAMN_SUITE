@@ -18,18 +18,18 @@ It's your private control room. One durable authority (Floyd Core) that owns pro
 | Five local presentation surfaces | **Shipped** | Desktop, IDE, TUI, TerminalOne, Launcher — pinned intake commits |
 | Live cross-surface session attach/steer | **Shipped** | Parity PASS 6/6 |
 | Multi-provider completion relay (GLM Coding Plan + alternates) | **Shipped** | Gateway tests + live loopback probe |
-| Portable experience envelope (hand-off state) | **Shipped** | Core/SDK/Cockpit + isolated five-client restore/conformance |
+| Portable experience envelope (hand-off state) | **Shipped** | Core/SDK/Frame + isolated five-client restore/conformance |
 | SDK capability/version negotiation | **Shipped** | Typed/browser SDK + accepted + HTTP 426 integration tests |
 | Floyd Core as launchd-owned durable daemon | **Shipped** | `pnpm core:install`, byte-identical `0600` plist, health-gated reload |
 | Core release builder + symlink-attack rejection | **Shipped** | `b7caf23` live, `lsof` confirms cwd is exact release dir, no path back to working checkout |
 | In-memory 8-hour HttpOnly session (replaced localStorage bearer) | **Shipped** | bootstrap 201, hostile Origin 403, hostile Host 421, revoke 200, post-revoke 401 |
 | Encrypted device identity | **In progress** | AES-GCM/scrypt/revocation pass; Secure HttpOnly cookie for paired browsers, native Keychain storage remains |
 | Deep-link + QR hand-off | **In progress** | Private HTTPS fragment link, inert local SVG QR, recoverable consume-once pairing — physical second-device scan remains |
-| Private remote attach | **In progress** | 41416 allowlisted listener + Tailscale HTTPS 8443 live; scoped attach, OOB denial, logout, stream revocation pass — second physical tailnet-device proof remains |
+| Private remote attach | **In progress** | 41416 allowlisted listener live; scoped attach, OOB denial, logout, stream revocation pass. Tailscale removed from this system; replacement private overlay required before remote attach is usable. |
 | Connector/OAuth authority | **In progress** | AES-GCM key/OAuth storage, PKCE, refresh/revoke, mock lifecycle — real-provider OAuth proof remains |
-| Unified application workspace (tabbed cockpit) | **Verified local preview** | Desktop, IDE, TerminalOne, Launcher, exact TUI continuation all render in one shell |
+| Unified application workspace (Frame shell) | **Verified local preview** | Frame (`apps/frame`) renders Desktop, IDE, TerminalOne, Launcher, exact TUI continuation in one Core-connected shell; first-party cockpit retired |
 
-Test totals: **154/154 passing**, `pnpm typecheck` exit 0, `pnpm verify:surfaces` PASS, `git diff --check` clean.
+Test totals: **154/154 passing**, `npm run typecheck` exit 0. `npm run verify:surfaces` reaches Core discovery but the admitted-surface identity handshake still reports `verified: false` for all four browser/transport surfaces — the apps respond on the admitted ports but do not yet return the required source-identity header/body Core expects.
 
 ## What's not done yet (be honest about it)
 

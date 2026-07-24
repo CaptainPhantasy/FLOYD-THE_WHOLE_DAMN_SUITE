@@ -15,7 +15,9 @@ durable authority.
 - Runtime/media hub: `/Volumes/Storage/FLOYD_RUNTIME`.
 - Floyd Core is the sole durable ecosystem authority.
 - Upstream OpenCode is the managed coding engine, never a deep fork by default.
-- CodeNomad is the cockpit baseline, not a second backend authority.
+- **The first-party cockpit is retired.** The active unified surface is
+  `apps/frame` plus the managed app surfaces declared in `apps/frame/registry.json`
+  and `ecosystem/surfaces.json`.
 - `ff` and `superfloyd` are untouched behavioral oracles.
 - The v5 backup is corrupted forensic lineage, never a code donor.
 - GLM Coding Plan is the initial coding route; MiniMax Token Plan is an explicit
@@ -28,8 +30,8 @@ durable authority.
 - Any donor use starts with a verified independent copy. Never use hardlinks or
   writable symlinks into legacy paths.
 - Never expose OpenCode, Floyd Core, browser control, MCP, shell, Git, or media
-  providers publicly. Tailscale/private routes only; public tunnels are explicit
-  break-glass work.
+  providers publicly. Private overlay routes only (Tailscale has been removed
+  from this system); public tunnels are explicit break-glass work.
 
 ## Authoritative planning documents
 
@@ -50,10 +52,10 @@ changes, commands, output, verification, and remaining work.
 | Port | Service |
 |---|---|
 | 13030 | FLOYD frame shell server |
-| 13020 | cursem-ide (frame-managed, intake/surfaces/ide) |
-| 13021 | floyd-desktop (frame-managed, intake/surfaces/desktop) |
+| 13010 | floyd-desktop (frame-managed, intake/surfaces/desktop) |
+| 13012 | cursem-ide (frame-managed, intake/surfaces/ide) |
+| 13013 | terminalone (frame-managed PTY) |
+| 13014 | harness-launcher (frame-managed, intake/surfaces/launcher) |
 | 13022 | floyd-code-cli (frame-managed pty copy, SHELL=ff) |
 | 13023 | ohmyfloyd (frame-managed pty copy, SHELL=floydcode) |
-| 13013 | terminalone (pre-existing claim, frame-managed) |
-| 11000 | harness-launcher (pre-existing claim, frame-managed) |
-| 8451-8455 | Tailscale-serve HTTPS remote ports for the five iframe apps |
+| 8451-8455 | Reserved HTTPS remote ports for the five iframe apps (currently inactive — no private overlay configured) |

@@ -17,6 +17,8 @@
     <string>/Users/douglastalley</string>
     <key>PATH</key>
     <string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>FLOYD_REMOTE_ORIGIN</key>
+    <string>https://floyd-workstation-remote.captainphantasy.chatgpt.site</string>
   </dict>
   <key>KeepAlive</key>
   <true/>

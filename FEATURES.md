@@ -10,10 +10,10 @@
 | SDK capability/version negotiation | Shipped | Typed/browser SDK plus accepted and HTTP 426 integration tests |
 | Encrypted device identity | In progress | AES-GCM/scrypt/revocation pass; paired browsers use a Secure HttpOnly session cookie, while native Keychain storage remains |
 | Deep-link and QR handoff | In progress | Private HTTPS fragment link, inert local SVG QR, independently mutable session snapshot, idempotently recoverable consume-once pairing, and cookie-auth tests pass; a physical second-device scan remains |
-| Private remote attach | In progress | Separate 41416 allowlisted listener and Tailscale HTTPS 8443 are live; scoped attach, out-of-bound denial, logout, and stream revocation pass, but a second physical tailnet-device proof remains |
+| Private remote attach | In progress | Separate 41416 allowlisted listener is live; scoped attach, out-of-bound denial, logout, and stream revocation pass. Tailscale has been removed from this system; a replacement private overlay is required before remote attach is usable. |
 | Connector/OAuth authority | In progress | AES-GCM API-key/OAuth storage, PKCE, refresh/revoke, endpoint-bound relay references, SDK parity, and mock lifecycle tests pass; real-provider OAuth proof remains |
 | Five-surface local continuity | Preview baseline | Desktop, IDE, TUI, TerminalOne, and launcher commits are pinned for local developer testing; exact TUI project/session/run/event handoff and semantic/transport ownership are explicit |
-| Unified application workspace | Verified local preview | Cockpit renders Desktop, IDE, TerminalOne, Launcher, and exact TUI continuation in one Core-connected tabbed shell; live PTY/Launcher close tests return active and resumable session counts to zero, while remote embedding remains an open gate |
+| Unified application workspace | Verified local preview | Frame (`apps/frame`) renders Desktop, IDE, TerminalOne, Launcher, and exact TUI continuation in one Core-connected shell; the first-party cockpit is retired. Live PTY/Launcher close tests return active and resumable session counts to zero, while remote embedding remains an open gate |
 | Unified private remote experience | In progress | Cockpit QR/private attach is implemented; physical second-device proof and native secure storage remain |
 
 “Shipped” means direct implementation and named verification exist. “In
@@ -60,5 +60,5 @@ Handoff operational boundaries:
 - Paired browser devices are transient and revoked on logout or by the one-minute
   expiry sweeper after their sessions lapse; tombstoned database rows remain for
   auditability rather than being physically deleted.
-- The remote surface remains private-tailnet only. This is continuity between
+- The remote surface remains private-overlay only. Tailscale has been removed from this system. This is continuity between
   Floyd surfaces, not a cross-application identity or context federation layer.

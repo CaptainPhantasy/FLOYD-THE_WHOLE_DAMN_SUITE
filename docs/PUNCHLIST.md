@@ -63,10 +63,14 @@ capabilities stay visibly unavailable until their provider passes e2e.
 - [ ] Scoped PTY provider with durable transcript/evidence refs (COHORT donor via copy-before-edit protocol).
 - [ ] No unauthenticated WebSocket, no arbitrary host-shell proxy (verified by test).
 
-### P10: Cockpit adoption decision (CodeNomad)
+### P10: Cockpit adoption decision (CodeNomad) — RETIRED
 
-- [ ] Independent pinned CodeNomad copy + source/security audit per admission protocol.
-- [ ] ADR: adopt-and-attach vs continue first-party cockpit; either way, one control plane.
+The first-party cockpit is retired. `apps/frame` plus the managed app surfaces in
+`apps/frame/registry.json` and `ecosystem/surfaces.json` is the active unified
+local surface. CodeNomad adoption is no longer a project goal.
+
+- [x] Decision recorded: retire first-party cockpit; frame is the active surface.
+- [ ] Update any remaining cockpit references in ADRs and docs to point at frame.
 
 ### P11: Multimedia (blueprint Phase F)
 
@@ -76,7 +80,7 @@ capabilities stay visibly unavailable until their provider passes e2e.
 ### P12: Mobile, browser, remote, lab (blueprint Phase G)
 
 - [ ] Capability-provider interfaces registered with health/permission/artifact/evidence contracts; shown UNAVAILABLE with exact blockers until e2e passes.
-- [ ] Tailscale-only device pairing + scoped capability tokens; revocation test.
+- [ ] Private-overlay device pairing + scoped capability tokens; revocation test. Tailscale has been removed from this system and is no longer the assumed transport.
 - [ ] Browser native-messaging host (no blind ports/unauth WS); lab provider with mount/secret/idle-shutdown policy.
 
 ### P13: Golden compatibility (blueprint Phase C)

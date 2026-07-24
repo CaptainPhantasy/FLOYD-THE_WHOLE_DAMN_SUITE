@@ -16,8 +16,8 @@
       "name": "CURSEM-IDE",
       "subtitle": "IDE · Code · Build",
       "kind": "url",
-      "target": "http://127.0.0.1:13020/",
-      "health": "http://127.0.0.1:13020/",
+      "target": "http://127.0.0.1:13012/",
+      "health": "http://127.0.0.1:13012/",
       "accent": "#a855f7",
       "remote_port": 8451
     },
@@ -26,8 +26,8 @@
       "name": "FLOYD DESKTOP",
       "subtitle": "Assistant · Media · Desktop",
       "kind": "url",
-      "target": "http://127.0.0.1:13021/",
-      "health": "http://127.0.0.1:13021/",
+      "target": "http://127.0.0.1:13010/",
+      "health": "http://127.0.0.1:13010/",
       "accent": "#3b82f6",
       "remote_port": 8452
     },
@@ -45,8 +45,8 @@
       "name": "BROWORK",
       "subtitle": "Sub-agents · Multi-agent · Dispatch",
       "kind": "url",
-      "target": "http://127.0.0.1:13021/?browork=1",
-      "health": "http://127.0.0.1:13021/",
+      "target": "http://127.0.0.1:13010/?browork=1",
+      "health": "http://127.0.0.1:13010/",
       "accent": "#22d3ee",
       "remote_port": 8452
     },
@@ -55,8 +55,8 @@
       "name": "FLOYD HARNESS LAUNCHER",
       "subtitle": "CI/CD · Pipelines · Deploy",
       "kind": "url",
-      "target": "http://127.0.0.1:11000/",
-      "health": "http://127.0.0.1:11000/",
+      "target": "http://127.0.0.1:13014/",
+      "health": "http://127.0.0.1:13014/",
       "accent": "#f59e0b",
       "remote_port": 8453
     },

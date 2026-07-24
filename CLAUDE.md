@@ -12,7 +12,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This is the **source/control hub** for the FLOYD workstation — a private, local-first operating environment joining coding, terminal, Git, agents, skills, memory, artifacts, and future surfaces under one durable authority.
 
-**Implementation status (updated 2026-07-12): the golden path is partially implemented and was runtime-verified only for the specific builder→reviewer→explicit-merge loop that was exercised.** Core/daemon unit tests pass (`pnpm test`, `pnpm typecheck`), but several claimed surfaces (`apps/cockpit`, terminal/PTY, media, skills registry, mobile/browser/lab, CodeNomad cockpit adoption, Floyd plugins) are not yet built or verified. A 2026-07-12 cleanup pass removed a self-resurrecting `com.floyd.core` launchd service, fixed a permission-handling hang, and hardened run cleanup. See `docs/HANDBACK-2026-07-12-golden-path.md` for the evidence that was proven and the explicit not-yet-available list.
+**Implementation status (updated 2026-07-23): the first-party cockpit is retired.** The active unified local surface is `apps/frame` plus the managed apps in `apps/frame/registry.json` and `ecosystem/surfaces.json`. Core/daemon unit tests pass (`npm test`, `npm run typecheck`), and the frame + managed apps (Desktop, IDE, TerminalOne, Launcher, and the two terminal surfaces) launch and respond on their admitted ports. Remaining open surfaces (media, skills registry, mobile/browser/lab, Floyd plugins) are documented with exact blockers. See `docs/HANDBACK-2026-07-12-golden-path.md` for earlier proven evidence and the current status note above.
 
 Read the planning documents in this order before doing implementation work:
 
@@ -28,9 +28,8 @@ Read the planning documents in this order before doing implementation work:
 - **Floyd Core** — a new persistent daemon, the *sole* durable ecosystem authority: projects, identity, sessions, runs/jobs, agents, skills, memory, worktree leases, artifacts, providers, policy, evidence, health/recovery.
 - **Upstream OpenCode** (exact version and SHA-256 pinned in `upstream.lock`; currently `1.17.18`) — the managed coding engine, run as a loopback child with Floyd-owned config/data paths through `@floyd/opencode-runtime` and the official SDK. Never a deep fork, never a wrapped/scraped CLI, never `--auto`.
 - **Thin stateless Floyd OpenCode plugin/adapter** — carries project/run/actor/worktree/correlation IDs, gates sensitive tools, emits normalized evidence. It holds no authoritative state.
-- **CodeNomad-derived Cockpit** — the primary desktop/web client attached to the same Floyd/OpenCode state; a client, never a second control plane.
-- Floyd Core maps engine-local IDs beneath canonical ones: `floyd_project_id → floyd_session_id → floyd_run_id → floyd_job_id → {opencode_* ids, worktree_lease_id, artifact/evidence refs}`.
-- Planned workspace: TypeScript with the installed Node and pnpm (verify compatibility first; do not install a global runtime), with `core`, `contracts`, `opencode`, `providers`, `cli`, `cockpit`, and test modules. Typed contracts (`ActionRequest`, `Run`, `Lease`, `Artifact`, `EvidenceEvent`, `AgentSpec`, etc.) and append-only event/outbox records come before any provider.
+- **Frame + managed surfaces** — `apps/frame` is the active unified local shell. It hosts the admitted app surfaces (Desktop, IDE, TerminalOne, Launcher, and the two terminal surfaces) and owns their lifecycle. The retired first-party cockpit is no longer the target client.
+- Planned workspace: TypeScript with the installed Node and pnpm (verify compatibility first; do not install a global runtime), with `core`, `contracts`, `opencode`, `providers`, `cli`, `frame`, and test modules. Typed contracts (`ActionRequest`, `Run`, `Lease`, `Artifact`, `EvidenceEvent`, `AgentSpec`, etc.) and append-only event/outbox records come before any provider.
 
 ## Path boundaries
 
@@ -41,7 +40,7 @@ Read the planning documents in this order before doing implementation work:
 ## Hard constraints
 
 - **Model routing:** GLM Coding Plan is the only approved coding route; record a route receipt (provider, model, subscription class, project, run, time — never a credential) before its first call. MiniMax Token Plan is an explicit alternate only after region/entitlement discovery. Anthropic, OpenCode-Go, Mistral, and all PAYG providers are disabled by default — no silent fallback.
-- **Network:** no public endpoints, public MCP, ngrok routes, remote repository, or credential rotation without Douglas's direct authority. Tailscale/private routes only.
+- **Network:** no public endpoints, public MCP, ngrok routes, remote repository, or credential rotation without Douglas's direct authority. Private overlay routes only; Tailscale has been removed from this system.
 - **No fakes:** no mock health checks, placeholder agents, empty skills, or capabilities rendered as working without a passing end-to-end provider test. Unavailable capabilities may be shown only with their exact blocker.
 - **Git flow:** nothing merges or pushes automatically; the user explicitly accepts, rejects, or escalates changes. Builder and reviewer agents never share a mutable worktree.
 

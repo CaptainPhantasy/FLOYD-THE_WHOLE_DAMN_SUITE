@@ -24,25 +24,26 @@ has no fallback to the globally installed direct-provider `omp` command.
 
 ## Handoff and remote access
 
-QR/deep-link issuance stays in the Core Cockpit. Other browser surfaces do not
-duplicate the bearer-fragment lifecycle. The receiver uses the private HTTPS
-remote boundary, scrubs the fragment before network activity, and receives a
-short-lived Secure, HttpOnly session cookie. Closing or superseding the issuer
-revokes the recovery window.
+QR/deep-link issuance stays in the Frame (or Core remote endpoint). Other
+browser surfaces do not duplicate the bearer-fragment lifecycle. The receiver
+uses the private HTTPS remote boundary, scrubs the fragment before network
+activity, and receives a short-lived Secure, HttpOnly session cookie. Closing or
+superseding the issuer revokes the recovery window.
 
 Floyd's active product objective is a Claude-like maintained experience across
 all admitted Floyd applications: a user can move between Desktop, IDE, TUI,
-TerminalOne, Launcher, and remote Cockpit without losing the active work. The
-preview baseline is a test milestone toward that objective, not a scope
-reduction or deferral. Floyd uses its own Core envelope rather than Anthropic's
-vendor account, so arbitrary third-party application federation is a different
-architecture; it is not being used as an excuse to weaken Floyd-to-Floyd
-handoff. A PTY byte stream still remains transport rather than a semantic
-conversation.
+TerminalOne, Launcher, and remote Frame without losing the active work. The
+first-party Cockpit is retired; Frame (`apps/frame`) is the active unified local
+surface. The preview baseline is a test milestone toward that objective, not a
+scope reduction or deferral. Floyd uses its own Core envelope rather than
+Anthropic's vendor account, so arbitrary third-party application federation is a
+different architecture; it is not being used as an excuse to weaken
+Floyd-to-Floyd handoff. A PTY byte stream still remains transport rather than a
+semantic conversation.
 
-The local Cockpit now supplies the single integrated application shell. Its
-workspace embeds only Core-verified admitted browser copies and exposes them as
-in-place tabs. Choosing the TUI tab loads TerminalOne with a one-shot
+The Frame (`apps/frame`) now supplies the single integrated application shell.
+Its workspace embeds only Core-verified admitted browser copies and exposes them
+as in-place tabs. Choosing the TUI tab loads TerminalOne with a one-shot
 `floyd=continue` marker; no project, session, run, event, token, or credential
 enters that URL. TerminalOne removes the marker before its WebSocket opens and
 asks Core for the exact semantic tuple. Closing or switching the workspace
@@ -79,7 +80,7 @@ to validate during real use, not reasons to redefine the requested outcome.
   Launcher or Core restart loses the raw terminal buffer; the Core-owned
   semantic transcript remains recoverable through exact TUI handoff.
 - Desktop and IDE stop reconnecting after their bounded retry budgets and then
-  require a user reload; Cockpit and TUI continue capped-backoff retries. Core
+  require a user reload; Frame and TUI continue capped-backoff retries. Core
   state remains safe in either case.
 - A provider can deliver partial deltas before its socket truncates. Floyd now
   marks that response incomplete and does not retry automatically because an

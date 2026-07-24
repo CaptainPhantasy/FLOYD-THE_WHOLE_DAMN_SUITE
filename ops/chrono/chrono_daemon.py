@@ -83,16 +83,21 @@ def heartbeat_age_for(app_id: str) -> float | None:
 
 
 def autosave(repo: str, app_id: str) -> str:
-    """Linear micro-snapshot: commit any dirty state before stopping."""
+    """Shadow micro-snapshot before stopping. Never commits to the branch and
+    never bypasses hooks — snapshots land on refs/chrono/snapshots via the
+    chrono sandbox (Proofline-compliant: plumbing only, no branch mutation)."""
     if not os.path.isdir(os.path.join(repo, ".git")):
         return "no-git"
-    dirty = run(["git", "status", "--porcelain"], cwd=repo).stdout.strip()
-    if not dirty:
-        return "clean"
-    run(["git", "add", "-A"], cwd=repo)
     msg = f"{AUTOSAVE_PREFIX} ({app_id} idle) {time.strftime('%Y-%m-%dT%H:%M:%S')}"
-    r = run(["git", "commit", "-m", msg, "--no-verify"], cwd=repo)
-    return "committed" if r.returncode == 0 else f"commit-failed: {r.stderr.strip()[:200]}"
+    cli = os.path.join(WORKSTATION, "ops", "chrono", "chrono_sandbox.py")
+    r = run([sys.executable, cli, repo, "snapshot", "-m", msg], timeout=60)
+    if r.returncode != 0:
+        return f"snapshot-failed: {r.stderr.strip()[:200]}"
+    try:
+        out = json.loads(r.stdout)
+        return "snapshotted" if out.get("snapshot") else "clean"
+    except ValueError:
+        return f"snapshot-unparsed: {r.stdout.strip()[:120]}"
 
 
 @dataclass

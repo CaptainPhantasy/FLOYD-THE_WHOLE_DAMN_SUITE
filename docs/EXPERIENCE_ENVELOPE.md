@@ -67,7 +67,7 @@ Session event cursors are run-scoped and paired with a process-unique stream epo
 restarts, the new epoch authorizes a reset to cursor zero even though the Floyd
 session itself did not change. Interactive transcript, steering, questions,
 and permissions always target the run's builder session, never the reviewer.
-Cockpit cursor writes carry their originating run and epoch and are discarded
+Frame cursor writes carry their originating run and epoch and are discarded
 after either changes. Concurrent run selections use a monotonic generation so
 an older network response cannot attach or publish over a newer selection.
 Active-context publications are serialized across run, new-task, and model-chat
@@ -84,14 +84,16 @@ them in history.
 
 The admin HTTP listener remains loopback-only on port 41414 and authenticated
 by the Core token. A separate loopback listener on port 41416 is the remote
-boundary; the live host publishes that boundary through Tailscale HTTPS on
-port 8443. Four additional Core-owned loopback relays on ports 41420-41423 are
-published on private Tailscale HTTPS ports 8444-8447 for the admitted Desktop,
-IDE, PTY, and Launcher copies. No application port is published directly.
-The remote listener and relays reject the Core token and provider relay,
-accepts only short-lived device sessions, and applies an explicit route,
-capability, and resource allowlist. Tailscale is transport defense in depth,
-not application identity. Funnel/public exposure remains prohibited.
+boundary; the live host publishes that boundary through a private overlay.
+Tailscale has been removed from this system, so no overlay is currently
+configured. Four additional Core-owned loopback relays on ports 41420-41423 are
+reserved for the admitted Desktop, IDE, PTY, and Launcher copies and will be
+published on private HTTPS ports once an overlay is in place. No application
+port is published directly. The remote listener and relays reject the Core token
+and provider relay, accept only short-lived device sessions, and apply an
+explicit route, capability, and resource allowlist. The private overlay is
+transport defense in depth, not application identity. Funnel/public exposure
+remains prohibited.
 
 `surface:access` is intentionally a broad single-developer grant: after fixed
 source-root/commit health verification, it carries the authenticated
@@ -132,9 +134,10 @@ Sharp edges remain: a copied QR bearer can recover the shared session until the
 issuer revokes it or it expires; screenshots, camera rolls, extensions, and a
 compromised receiver can capture the fragment before it is scrubbed. Native
 clients still need platform-secure storage, and the private HTTPS lifecycle has
-been proved from the host and from a second physical tailnet MacBook. That run
-consumed a new one-time handoff, rendered Floyd Desktop in the unified remote
-shell, revoked the device session, and received 401 on its next state request.
+been proved from the host and from a second physical device on the then-active
+private overlay. That run consumed a new one-time handoff, rendered Floyd
+Desktop in the unified remote shell, revoked the device session, and received
+401 on its next state request.
 QR issuance also fails closed when the local system
 `qrencode` binary is missing, incompatible, timed out, or returns disallowed
 SVG geometry.

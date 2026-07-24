@@ -1,7 +1,9 @@
 # Floyd Gateway Session Contract
 
-Version: 1.0 (2026-07-12). Any surface — CLI, Cockpit, future mobile — can be
+Version: 1.0 (2026-07-12). Any surface — CLI, Frame, future mobile — can be
 built against this document alone; no additional gateway changes are required.
+The first-party Cockpit is retired; Frame (`apps/frame`) is the current unified
+local surface.
 
 ## Transport and authentication
 
@@ -10,7 +12,7 @@ built against this document alone; no additional gateway changes are required.
 - Native and server-side clients carry `Authorization: Bearer <gateway token>`
   (`FLOYD_RUNTIME/core/gateway.token`, 0600). API query-token authentication is
   forbidden.
-- The local Cockpit never persists that gateway token in browser storage. A
+- The Frame never persists that gateway token in browser storage. A
   `#token=...` fragment may bootstrap the page once; the page removes the
   fragment from the visible URL before network activity, exchanges the bearer
   through `POST /api/local-session`, then erases its JavaScript reference.
