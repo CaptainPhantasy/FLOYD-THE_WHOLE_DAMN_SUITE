@@ -8,6 +8,6 @@
     "./browser": "./browser/floyd-sdk.js"
   },
   "dependencies": {
-    "@floyd/contracts": "workspace:*"
+    "@floyd/contracts": "*"
   }
 }
