@@ -30,7 +30,8 @@
     transition: width .45s var(--spring); display: flex; flex-direction: column; }
   .drawer.open { width: var(--drawer-open); box-shadow: 24px 0 60px rgba(0,0,0,.45); }
   .drawer-head { display: flex; align-items: center; gap: 12px; padding: 18px 16px; min-height: 64px; }
-  .mark { width: 34px; height: 34px; flex: 0 0 34px; border-radius: 9px; background: linear-gradient(135deg, #f0f, #22d3ee); display: grid; place-items: center; font-weight: 800; color: #000; font-size: 18px; }
+  .mark { width: 34px; height: 34px; flex: 0 0 34px; border-radius: 9px; overflow: hidden; }
+  .mark img { width: 100%; height: 100%; object-fit: cover; display: block; }
   .wordmark { font-weight: 700; letter-spacing: .14em; white-space: nowrap; opacity: 0; transform: translateX(-8px); transition: opacity .3s ease .08s, transform .45s var(--spring) .05s; }
   .drawer.open .wordmark { opacity: 1; transform: none; }
   .apps { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 6px 10px; display: flex; flex-direction: column; gap: 8px; scrollbar-width: thin; }
@@ -58,14 +59,20 @@
   .stage { left: 0; transition: left .45s var(--spring); }
   body[data-vertical="tablet"] .stage { left: var(--drawer-closed); }
 
-  .titlebar { position: fixed; z-index: 30; top: 0; right: 0; left: var(--drawer-closed); height: 44px;
-    display: flex; align-items: center; gap: 10px; padding: 0 14px;
+  .titlebar { position: fixed; z-index: 30; top: 0; right: 0; left: var(--drawer-closed); height: 64px;
+    display: flex; align-items: center; gap: 12px; padding: 0 16px;
     background: color-mix(in srgb, var(--panel) 66%, transparent); backdrop-filter: blur(14px); border-bottom: 1px solid var(--line);
     transition: left .45s var(--spring), opacity .3s ease; }
-  .titlebar .app-name { font: 600 12px ui-monospace, monospace; letter-spacing: .1em; color: var(--muted); }
-  .titlebar .spacer { flex: 1; }
-  .chip { border: 1px solid var(--line); background: transparent; color: var(--muted); border-radius: 7px; padding: 5px 11px; font: 12px ui-monospace, monospace; cursor: pointer; }
-  .chip:hover { color: var(--text); border-color: var(--faint); }
+  .titlebar .brand { height: 48px; width: 48px; flex: 0 0 48px; border-radius: 10px; object-fit: cover; border: 1px solid var(--line); }
+  .titlebar .app-name { font: 600 15px ui-monospace, monospace; letter-spacing: .1em; color: var(--muted); white-space: nowrap; }
+  .titlebar .spacer { flex: 0 0 8px; }
+  /* Chips share the whole remaining bar width equally — big targets, big text. */
+  .chip { flex: 1 1 0; min-width: 0; min-height: 46px; border: 1px solid var(--line); background: transparent; color: var(--muted);
+    border-radius: 10px; padding: 10px 14px; font: 600 16px ui-monospace, monospace; letter-spacing: .04em; cursor: pointer;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .chip:hover { color: var(--text); border-color: var(--faint); background: var(--panel-2); }
+  /* Compact chips (panel close buttons etc.) keep their natural size. */
+  .keys-head .chip, .chrono-head .chip { flex: 0 0 auto; min-height: 0; padding: 5px 11px; font: 12px ui-monospace, monospace; }
   body[data-chrome="hidden"] .titlebar { opacity: 0; pointer-events: none; }
 
   /* ---------- desktop: all chrome vanishes until the pointer hovers an edge ---------- */
@@ -82,7 +89,7 @@
   /* ---------- mobile vertical: bottom nav, no hover ---------- */
   body[data-vertical="mobile"] .drawer { display: none; }
   body[data-vertical="mobile"] .stage { left: 0; }
-  body[data-vertical="mobile"] .titlebar { left: 0; padding-top: env(safe-area-inset-top); height: calc(44px + env(safe-area-inset-top)); }
+  body[data-vertical="mobile"] .titlebar { left: 0; padding-top: env(safe-area-inset-top); height: calc(64px + env(safe-area-inset-top)); }
   .bottomnav { display: none; }
   body[data-vertical="mobile"] .bottomnav { position: fixed; z-index: 40; left: 0; right: 0; bottom: 0; display: flex;
     background: color-mix(in srgb, var(--panel) 92%, transparent); backdrop-filter: blur(18px); border-top: 1px solid var(--line);
@@ -178,12 +185,20 @@
   .keys-msg.ok { color: #34d399; }
   .keys-msg.err { color: #f87171; }
   .keys-list { display: flex; flex-direction: column; gap: 8px; }
-  .key-item { display: flex; align-items: center; gap: 10px; border: 1px solid var(--line); border-radius: 11px; padding: 10px 12px; }
+  .key-item { display: flex; align-items: center; gap: 10px; border: 1px solid var(--line); border-radius: 11px; padding: 10px 12px; flex-wrap: wrap; }
   .key-item .k-dot { width: 9px; height: 9px; flex: 0 0 9px; border-radius: 50%; background: #333a48; }
   .key-item.configured .k-dot { background: #34d399; }
   .key-item .k-meta { min-width: 0; flex: 1; }
   .key-item .k-meta strong { display: block; font-size: 13px; }
   .key-item .k-meta span { display: block; font: 11px ui-monospace, monospace; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .key-item .k-endpoint { flex-basis: 100%; display: flex; align-items: center; gap: 6px; font: 10px ui-monospace, monospace; color: var(--faint); min-width: 0; }
+  .key-item .k-endpoint .ep { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .key-item .k-endpoint .ep.custom { color: var(--accent); }
+  .key-item .k-endpoint button { flex: 0 0 auto; border: 0; background: none; color: var(--faint); font: 10px ui-monospace, monospace; cursor: pointer; text-decoration: underline; padding: 0; }
+  .key-item .k-endpoint button:hover { color: var(--text); }
+  .key-item .k-ep-edit { flex-basis: 100%; display: flex; gap: 6px; }
+  .key-item .k-ep-edit input { flex: 1; min-width: 0; background: var(--panel-2); color: var(--text); border: 1px solid var(--line); border-radius: 7px; padding: 6px 8px; font: 11px ui-monospace, monospace; }
+  .key-item .k-ep-edit input:focus { outline: none; border-color: var(--accent); }
   .key-item .k-get { font: 11px ui-monospace, monospace; color: var(--accent); text-decoration: none; white-space: nowrap; }
   .key-item .k-get:hover { text-decoration: underline; }
   .key-item .k-del { flex: 0 0 24px; width: 24px; height: 24px; border-radius: 6px; border: 1px solid var(--line); background: transparent;
@@ -203,6 +218,7 @@
 </div>
 
 <header class="titlebar" id="titlebar">
+  <img class="brand" src="/assets/floyd-labs-logo.png" alt="Floyd's Labs">
   <span class="app-name" id="titleAppName"></span>
   <span class="spacer"></span>
   <button class="chip" id="chipChrono" title="Chrono sandbox: snapshots, rewinds, forks">⏱ Chrono</button>
@@ -216,7 +232,7 @@
 <div class="edge-hot" id="edgeLeft" aria-hidden="true"></div>
 <div class="edge-hot" id="edgeTop" aria-hidden="true"></div>
 <nav class="drawer" id="drawer" aria-label="Floyd apps">
-  <div class="drawer-head"><div class="mark">F</div><div class="wordmark">FLOYD LABS</div></div>
+  <div class="drawer-head"><div class="mark"><img src="/assets/floyd-labs-logo.png" alt="Floyd's Labs"></div><div class="wordmark">FLOYD'S LABS</div></div>
   <div class="apps" id="appList"></div>
   <div class="drawer-foot">
     <button class="app" id="settingsBtn" style="min-height:44px"><div class="app-icon">⚙</div><div class="app-meta"><strong>Settings</strong><span>Background · verticals</span></div></button>
@@ -417,9 +433,10 @@ async function openApp(id) {
       frame.className = "stage-frame";
       frame.title = app.name;
       const port = r.port ?? new URL(app.target).port;
-      // Remote (tailnet) visitors cannot reach 127.0.0.1 on this machine —
-      // route through the Tailscale-served HTTPS port for the same host.
-      // Any *.localhost name (e.g. floyd.localhost) is local by definition.
+      // Remote visitors cannot reach 127.0.0.1 on this machine. A private overlay
+      // (WireGuard, cloudflared tunnel, etc.) is required for remote embedding.
+      // Tailscale has been removed from this system and the remote_port path is
+      // currently inactive. Any *.localhost name (e.g. floyd.localhost) is local by definition.
       const h = location.hostname;
       const remote = !(["127.0.0.1", "localhost", "::1", ""].includes(h) || h.endsWith(".localhost"));
       frame.src = remote && app.remote_port
@@ -447,7 +464,31 @@ function activate(id) {
   el("titleAppName").textContent = app ? app.name : "";
   // Returning home: rotate the stage art so the backdrop alternates too.
   if (id === "home") { state.bgFile = nextSweet(); localStorage.setItem("floyd.bgFile", state.bgFile); applyBackground(); }
+  chronoFollowApp(id);
   renderNav();
+}
+
+/* Chrono panel tracks the active app: selecting an app in the frame retargets
+   the chrono surface automatically (manual re-select still works until the
+   next app switch). */
+const CHRONO_APP_SURFACE = {
+  "cursem-ide": "ide",
+  "floyd-desktop": "desktop",
+  "browork": "desktop",
+  "harness-launcher": "launcher",
+  "floyd-code-cli": "pty",
+  "ohmyfloyd": "pty",
+  "terminalone": "pty",
+  "home": "workstation",
+};
+function chronoFollowApp(id) {
+  const surface = CHRONO_APP_SURFACE[id];
+  if (!surface) return;
+  const sel = el("chronoSurface");
+  if (!sel || sel.value === surface) return;
+  if (![...sel.options].some((o) => o.value === surface)) return;
+  sel.value = surface;
+  if (chrono.panel.classList.contains("open")) chronoRefresh();
 }
 
 /* ============ per-vertical presentation trees ============ */
@@ -612,6 +653,8 @@ async function chronoInit() {
     const o = document.createElement("option"); o.value = name; o.textContent = name; return o;
   }));
   sel.addEventListener("change", chronoRefresh);
+  // Options exist now: align the surface with whatever app is already active.
+  chronoFollowApp(state.activeApp);
 }
 el("chipChrono").addEventListener("click", () => {
   chrono.panel.classList.toggle("open");
@@ -647,11 +690,38 @@ async function keysRefresh() {
     d.innerHTML = `<span class="k-dot"></span>
       <div class="k-meta"><strong></strong><span></span></div>
       ${p.configured ? `<button class="k-del" title="Remove ${p.name} key">×</button>`
-                     : `<a class="k-get" href="${p.url}" target="_blank" rel="noreferrer noopener">get key ↗</a>`}`;
+                     : `<a class="k-get" href="${p.url}" target="_blank" rel="noreferrer noopener">get key ↗</a>`}
+      ${p.endpoint ? `<div class="k-endpoint"><span class="ep ${p.customEndpoint ? "custom" : ""}"></span><button class="k-ep-btn">edit</button>${p.customEndpoint ? `<button class="k-ep-reset">reset</button>` : ""}</div>` : ""}`;
     d.querySelector("strong").textContent = p.name;
     d.querySelector(".k-meta span").textContent = p.configured
       ? `${p.masked}${p.verified ? " · verified" : ""} · ${p.env}`
       : p.env;
+    const epLabel = d.querySelector(".k-endpoint .ep");
+    if (epLabel) { epLabel.textContent = p.endpoint; epLabel.title = p.endpoint; }
+    d.querySelector(".k-ep-btn")?.addEventListener("click", () => {
+      const row = d.querySelector(".k-endpoint");
+      const edit = document.createElement("div");
+      edit.className = "k-ep-edit";
+      edit.innerHTML = `<input value="" spellcheck="false"><button class="cbtn">Save</button><button class="cbtn">Cancel</button>`;
+      const input = edit.querySelector("input");
+      input.value = p.endpoint;
+      const [saveB, cancelB] = edit.querySelectorAll("button");
+      saveB.addEventListener("click", async () => {
+        const r = await (await fetch(`/api/keys/${p.id}/endpoint`, { method: "PUT", body: JSON.stringify({ endpoint: input.value.trim() }) })).json();
+        if (r.error) { keysMsg(`✗ ${r.error}`, "err"); return; }
+        keysMsg(r.check ? (r.check.valid ? `✓ ${p.name} endpoint saved — key verified live` : `⚠ endpoint saved but: ${r.check.note || "key not verified"}`) : `✓ ${p.name} endpoint saved`, r.check && !r.check.valid ? "err" : "ok");
+        keysRefresh();
+      });
+      cancelB.addEventListener("click", () => { edit.replaceWith(row); });
+      input.addEventListener("keydown", (e) => { if (e.key === "Enter") saveB.click(); if (e.key === "Escape") cancelB.click(); });
+      row.replaceWith(edit);
+      input.focus();
+    });
+    d.querySelector(".k-ep-reset")?.addEventListener("click", async () => {
+      const r = await (await fetch(`/api/keys/${p.id}/endpoint`, { method: "PUT", body: JSON.stringify({ endpoint: "" }) })).json();
+      keysMsg(r.error ? `✗ ${r.error}` : `✓ ${p.name} endpoint reset to default`, r.error ? "err" : "ok");
+      keysRefresh();
+    });
     d.querySelector(".k-del")?.addEventListener("click", async () => {
       if (!confirm(`Remove the stored ${p.name} key? Apps launched afterwards will no longer receive ${p.env}.`)) return;
       await fetch(`/api/keys/${p.id}`, { method: "DELETE" });
