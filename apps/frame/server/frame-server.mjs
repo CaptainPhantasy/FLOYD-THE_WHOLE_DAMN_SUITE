@@ -412,12 +412,9 @@ function chronoRun(repo, argv) {
   });
 }
 function chronoLog(repo, n) {
-  return new Promise((done) => {
-    execFile("git", ["log", "--pretty=%h|%ad|%s", "--date=format:%H:%M:%S", `-${n}`], { cwd: repo, timeout: 15000 }, (err, stdout) => {
-      if (err) return done({ ok: false, error: String(err).slice(0, 300) });
-      done({ ok: true, commits: stdout.trim().split("\n").filter(Boolean).map((l) => { const [sha, time, ...s] = l.split("|"); return { sha, time, subject: s.join("|") }; }) });
-    });
-  });
+  // Rewind targets are shadow snapshots (refs/chrono/snapshots), not branch
+  // commits — the CLI's timeline op reads that ref.
+  return chronoRun(repo, ["timeline", "-n", String(n)]);
 }
 
 // ---- http ------------------------------------------------------------------

@@ -3,8 +3,12 @@
 
 Bare-metal git + APFS primitives, stdlib only. Implements:
 
-  * micro-snapshot   — linear micro-snapshotting (T-1 recovery point per tool call)
-  * rewind           — linear rewind to any snapshot (safe by default: snapshots first)
+  * micro-snapshot   — shadow-ref snapshot (refs/chrono/snapshots): T-1 recovery
+                       point per tool call. Never touches the branch, HEAD, index,
+                       hooks, or `git log` (Claude-style shadow checkpoints).
+  * timeline         — list shadow snapshots (rewind targets)
+  * rewind           — restore working tree from any snapshot/ref; HEAD unmoved;
+                       always takes a pre-rewind safety snapshot first
   * fork             — chrono-forking: N parallel worktrees off one commit
   * forks            — list live forks with dirty/diff state
   * diff             — inspect one fork's diff vs its base (for ensemble voting)
@@ -15,6 +19,7 @@ Bare-metal git + APFS primitives, stdlib only. Implements:
 
 Usage:
   chrono_sandbox.py <repo> snapshot [-m MSG]
+  chrono_sandbox.py <repo> timeline [-n N]
   chrono_sandbox.py <repo> rewind [--to REF] [--hard]
   chrono_sandbox.py <repo> fork NAME [NAME ...] [--base REF]
   chrono_sandbox.py <repo> forks
@@ -38,6 +43,7 @@ import sys
 import time
 
 FORK_PREFIX = "chrono/"
+SHADOW_REF = "refs/chrono/snapshots"
 
 
 def fail(msg: str) -> "None":
@@ -85,30 +91,121 @@ class Sandbox:
     def dirty(self, cwd: str | None = None) -> bool:
         return bool(self.git("status", "--porcelain", cwd=cwd).stdout.strip())
 
+    # ---- shadow-ref plumbing ----------------------------------------------
+    # Snapshots live under refs/chrono/snapshots: real commit objects in the
+    # app's own object database, but on a hidden ref. The branch, `git log`,
+    # `git status`, pushes, and hooks never see them (Claude-style shadow
+    # checkpoints). A throwaway index file keeps the user's staging area
+    # untouched.
+    def _tmp_index(self) -> str:
+        return os.path.join(self.repo, ".git", "chrono-index")
+
+    def _git_shadow(self, *args: str, check: bool = True) -> subprocess.CompletedProcess:
+        env = dict(os.environ, GIT_INDEX_FILE=self._tmp_index())
+        r = subprocess.run(["git", *args], cwd=self.repo, capture_output=True, text=True, env=env)
+        if check and r.returncode != 0:
+            fail(f"git {' '.join(args)}: {r.stderr.strip()}")
+        return r
+
+    def shadow_tip(self) -> str | None:
+        r = self.git("rev-parse", "--verify", "--quiet", SHADOW_REF, check=False)
+        return r.stdout.strip() or None
+
+    def _head_or_none(self) -> str | None:
+        r = self.git("rev-parse", "--verify", "--quiet", "HEAD", check=False)
+        return r.stdout.strip() or None
+
     # ---- linear time -------------------------------------------------------
     def snapshot(self, message: str | None = None) -> dict:
-        if not self.dirty():
-            out = {"ok": True, "snapshot": None, "head": self.head(), "note": "clean, nothing to commit"}
-            return out
-        self.git("add", "-A")
+        """Shadow snapshot: capture the entire working tree (tracked + untracked,
+        excludes respected) as a commit on refs/chrono/snapshots. The branch,
+        HEAD, and the user's index are never touched."""
+        tmp = self._tmp_index()
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        # Build a fresh index of the full current working state.
+        self._git_shadow("add", "-A")
+        tree = self._git_shadow("write-tree").stdout.strip()
+        tip = self.shadow_tip()
+        if tip:
+            prev_tree = self.git("rev-parse", f"{tip}^{{tree}}").stdout.strip()
+            if prev_tree == tree:
+                return {"ok": True, "snapshot": None, "tip": tip,
+                        "note": "no changes since last snapshot"}
         msg = message or f"chrono: micro-snapshot {time.strftime('%Y-%m-%dT%H:%M:%S')}"
-        self.git("commit", "-m", msg, "--no-verify")
-        sha = self.head()
+        base = self._head_or_none()
+        full_msg = msg + (f"\n\nchrono-base: {base}" if base else "")
+        args = ["commit-tree", tree, "-m", full_msg]
+        if tip:
+            args += ["-p", tip]
+        sha = self.git(*args).stdout.strip()
+        self.git("update-ref", SHADOW_REF, sha, tip or "")
         self.record("snapshot", sha=sha, message=msg)
         return {"ok": True, "snapshot": sha, "message": msg}
 
-    def rewind(self, to: str = "HEAD~1", hard: bool = False) -> dict:
-        # Safety: snapshot current state first so the rewind itself is reversible.
+    def timeline(self, n: int = 15) -> dict:
+        """List shadow snapshots newest-first (the rewind targets)."""
+        tip = self.shadow_tip()
+        if not tip:
+            return {"ok": True, "commits": [], "note": "no snapshots yet"}
+        r = self.git("log", f"--max-count={n}", "--pretty=format:%h|%H|%ad|%s",
+                     "--date=format:%H:%M:%S", SHADOW_REF)
+        commits = []
+        for line in r.stdout.splitlines():
+            sha, full, t, *rest = line.split("|")
+            commits.append({"sha": sha, "full": full, "time": t, "subject": "|".join(rest)})
+        return {"ok": True, "commits": commits}
+
+    def rewind(self, to: str | None = None, hard: bool = False) -> dict:
+        """Restore the working tree from a snapshot (shadow commit) or any ref.
+
+        HEAD and the branch are never moved. Files are overwritten to match the
+        snapshot; files that exist now but not in the snapshot are deleted
+        (tracked-state restore). A pre-rewind safety snapshot is always taken
+        first, so the rewind itself is undoable. `hard` is accepted for
+        API compatibility; both modes are safe because of the pre-snapshot.
+        """
+        # Default target: the latest shadow snapshot.
+        if not to:
+            to = self.shadow_tip() or "HEAD~1"
+        target = self.git("rev-parse", "--verify", f"{to}^{{commit}}").stdout.strip()
+        # Safety net first — this rewind must itself be reversible.
         pre = self.snapshot("chrono: pre-rewind safety snapshot")
-        pre_sha = self.head()
-        target = self.git("rev-parse", "--verify", to).stdout.strip()
-        if hard:
-            self.git("reset", "--hard", target)
-        else:
-            self.git("reset", "--keep", target)
+        pre_sha = pre.get("snapshot") or pre.get("tip") or self.shadow_tip()
+
+        # Materialize the target state through the throwaway index so the
+        # user's real index/staging area is untouched.
+        tmp = self._tmp_index()
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        self._git_shadow("read-tree", target)
+        self._git_shadow("checkout-index", "-a", "-f")
+        # Delete files that exist now but are absent in the target snapshot
+        # (otherwise a rewind can never remove a file). Untracked-in-both are
+        # handled because snapshots capture untracked files too.
+        now_files = set(self._git_shadow("ls-files").stdout.splitlines())
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        self._git_shadow("add", "-A")
+        current = set(self._git_shadow("ls-files").stdout.splitlines())
+        for path in sorted(current - now_files):
+            fp = os.path.join(self.repo, path)
+            if os.path.isfile(fp) or os.path.islink(fp):
+                os.remove(fp)
+        # Clean up emptied directories left behind by deletions.
+        for path in sorted(current - now_files, reverse=True):
+            d = os.path.dirname(os.path.join(self.repo, path))
+            while d != self.repo:
+                try:
+                    os.rmdir(d)
+                except OSError:
+                    break
+                d = os.path.dirname(d)
+        if os.path.exists(tmp):
+            os.remove(tmp)
         self.record("rewind", frm=pre_sha, to=target, hard=hard)
         return {"ok": True, "rewound_from": pre_sha, "now_at": target,
-                "recovery_hint": f"git reset --hard {pre_sha}", "pre_snapshot": pre}
+                "recovery_hint": f"chrono rewind --to {pre_sha}", "pre_snapshot": pre}
 
     # ---- branching time ----------------------------------------------------
     def fork(self, names: list[str], base: str | None = None) -> dict:
@@ -154,7 +251,11 @@ class Sandbox:
         if self.dirty(cwd=path):
             self.git("add", "-A", cwd=path)
             self.git("commit", "-m", f"chrono: finalize fork {name}", "--no-verify", cwd=path)
+        # Shadow safety snapshot, then require a clean main tree: merge is a
+        # real branch operation and must not silently mix in uncommitted work.
         pre = self.snapshot(f"chrono: pre-merge of {name}")
+        if self.dirty():
+            fail(f"main worktree has uncommitted changes; commit or stash them before merging fork {name} (a shadow snapshot was taken: {pre.get('snapshot') or pre.get('tip')})")
         r = self.git("merge", "--no-ff", branch, "-m", f"chrono: merge winner {name}", check=False)
         if r.returncode != 0:
             self.git("merge", "--abort", check=False)
@@ -206,7 +307,8 @@ def main() -> None:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     s = sub.add_parser("snapshot"); s.add_argument("-m", "--message")
-    r = sub.add_parser("rewind"); r.add_argument("--to", default="HEAD~1"); r.add_argument("--hard", action="store_true")
+    r = sub.add_parser("rewind"); r.add_argument("--to", default=None); r.add_argument("--hard", action="store_true")
+    tl = sub.add_parser("timeline"); tl.add_argument("-n", type=int, default=15)
     f = sub.add_parser("fork"); f.add_argument("names", nargs="+"); f.add_argument("--base")
     sub.add_parser("forks")
     d = sub.add_parser("diff"); d.add_argument("name")
@@ -220,6 +322,7 @@ def main() -> None:
     out = {
         "snapshot": lambda: sb.snapshot(a.message),
         "rewind": lambda: sb.rewind(a.to, a.hard),
+        "timeline": lambda: sb.timeline(a.n),
         "fork": lambda: sb.fork(a.names, a.base),
         "forks": lambda: sb.list_forks(),
         "diff": lambda: sb.diff(a.name),
