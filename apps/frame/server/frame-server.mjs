@@ -6,13 +6,14 @@
  * - Spawns dedicated TerminalOne instances whose shell IS the CLI app (ff / floydcode),
  *   so terminal apps present already open.
  * - Backgrounds: PNG served as-is, TIFF auto-converted once via macOS sips.
- * - Solo use: binds 127.0.0.1 by default; put Tailscale/tailserve in front for remote.
+ * - Solo use: binds 127.0.0.1 by default; remote access requires a separate private overlay.
  */
 import http from "node:http";
 import { spawn, execFile } from "node:child_process";
-import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { homedir } from "node:os";
 import net from "node:net";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
@@ -43,28 +44,178 @@ function wrapperFor(id, execLine) {
   return path;
 }
 
+// ---- provider key vault ------------------------------------------------------
+// One place for vendor API keys. Stored 0600 in FLOYD_RUNTIME/secrets, injected
+// into every managed app's environment at launch, never returned unmasked.
+const SECRETS_DIR = "/Volumes/Storage/FLOYD_RUNTIME/secrets";
+const VAULT_PATH = join(SECRETS_DIR, "provider-keys.json");
+const PROVIDERS = [
+  { id: "openai",     name: "OpenAI",       env: "OPENAI_API_KEY",       prefixes: ["sk-proj-", "sk-svcacct-"], ambiguous: ["sk-"], url: "https://platform.openai.com/api-keys",
+    test: (k) => ({ url: "https://api.openai.com/v1/models", headers: { authorization: `Bearer ${k}` } }) },
+  { id: "anthropic",  name: "Anthropic",    env: "ANTHROPIC_API_KEY",    prefixes: ["sk-ant-"], url: "https://console.anthropic.com/settings/keys",
+    test: (k) => ({ url: "https://api.anthropic.com/v1/models", headers: { "x-api-key": k, "anthropic-version": "2023-06-01" } }) },
+  { id: "google",     name: "Google Gemini", env: "GEMINI_API_KEY",      prefixes: ["AIza"], url: "https://aistudio.google.com/apikey",
+    test: (k) => ({ url: `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(k)}` }) },
+  { id: "openrouter", name: "OpenRouter",   env: "OPENROUTER_API_KEY",   prefixes: ["sk-or-"], url: "https://openrouter.ai/settings/keys",
+    test: (k) => ({ url: "https://openrouter.ai/api/v1/models", headers: { authorization: `Bearer ${k}` } }) },
+  { id: "xai",        name: "xAI Grok",     env: "XAI_API_KEY",          prefixes: ["xai-"], url: "https://console.x.ai",
+    test: (k) => ({ url: "https://api.x.ai/v1/models", headers: { authorization: `Bearer ${k}` } }) },
+  { id: "deepseek",   name: "DeepSeek",     env: "DEEPSEEK_API_KEY",     prefixes: [], ambiguous: ["sk-"], url: "https://platform.deepseek.com/api_keys",
+    test: (k) => ({ url: "https://api.deepseek.com/models", headers: { authorization: `Bearer ${k}` } }) },
+  { id: "groq",       name: "Groq",         env: "GROQ_API_KEY",         prefixes: ["gsk_"], url: "https://console.groq.com/keys",
+    test: (k) => ({ url: "https://api.groq.com/openai/v1/models", headers: { authorization: `Bearer ${k}` } }) },
+  { id: "mistral",    name: "Mistral",      env: "MISTRAL_API_KEY",      prefixes: [], url: "https://console.mistral.ai/api-keys",
+    test: (k) => ({ url: "https://api.mistral.ai/v1/models", headers: { authorization: `Bearer ${k}` } }) },
+  { id: "huggingface", name: "Hugging Face", env: "HF_TOKEN",            prefixes: ["hf_"], url: "https://huggingface.co/settings/tokens",
+    test: (k) => ({ url: "https://huggingface.co/api/whoami-v2", headers: { authorization: `Bearer ${k}` } }) },
+  { id: "github",     name: "GitHub",       env: "GITHUB_TOKEN",         prefixes: ["ghp_", "github_pat_", "gho_"], url: "https://github.com/settings/tokens",
+    test: (k) => ({ url: "https://api.github.com/user", headers: { authorization: `Bearer ${k}`, "user-agent": "floyd-frame" } }) },
+  { id: "elevenlabs", name: "ElevenLabs",   env: "ELEVENLABS_API_KEY",   prefixes: [], url: "https://elevenlabs.io/app/settings/api-keys",
+    test: (k) => ({ url: "https://api.elevenlabs.io/v1/user", headers: { "xi-api-key": k } }) },
+  { id: "zai",        name: "Z.ai GLM Coding", env: "GLM_API_KEY", envAliases: ["ZAI_API_KEY"], prefixes: [], url: "https://z.ai/manage-apikey/apikey-list",
+    // GLM Coding Max plan: OpenAI-compatible coding endpoint is the ONLY valid surface.
+    test: (k) => ({ url: "https://api.z.ai/api/coding/paas/v4/chat/completions", method: "POST",
+      headers: { authorization: `Bearer ${k}`, "content-type": "application/json" },
+      body: JSON.stringify({ model: "glm-4.7", max_tokens: 1, messages: [{ role: "user", content: "ok" }] }) }) },
+  { id: "tavily",     name: "Tavily Search", env: "TAVILY_API_KEY",      prefixes: ["tvly-"], url: "https://app.tavily.com" },
+  { id: "fal",        name: "fal.ai",       env: "FAL_KEY",              prefixes: [], url: "https://fal.ai/dashboard/keys",
+    test: (k) => ({ url: "https://fal.run/health", headers: { authorization: `Key ${k}` } }) },
+];
+
+function readVault() {
+  try { return JSON.parse(readFileSync(VAULT_PATH, "utf8")); } catch { return {}; }
+}
+function writeVault(vault) {
+  mkdirSync(SECRETS_DIR, { recursive: true, mode: 0o700 });
+  writeFileSync(VAULT_PATH, JSON.stringify(vault, null, 2), { mode: 0o600 });
+  chmodSync(VAULT_PATH, 0o600);
+}
+/** Env block injected into every managed app: vault keys never override an
+ * explicitly exported process env var (explicit always wins). */
+function vaultEnv() {
+  const vault = readVault();
+  const env = {};
+  for (const p of PROVIDERS) {
+    const key = vault[p.id]?.key;
+    if (!key) continue;
+    for (const name of [p.env, ...(p.envAliases || [])]) {
+      if (!process.env[name]) env[name] = key;
+    }
+  }
+  return env;
+}
+const maskKey = (k) => (k.length <= 12 ? `${k.slice(0, 3)}…` : `${k.slice(0, 8)}…${k.slice(-4)}`);
+/** Apps that read keys from their own .env.local files rather than the
+ * environment (CURSEM, Floyd Desktop). Upsert KEY=value lines in place. */
+function upsertEnvFile(path, updates) {
+  let lines = [];
+  try { lines = readFileSync(path, "utf8").split("\n"); } catch {}
+  for (const [k, v] of Object.entries(updates)) {
+    const line = `${k}=${v}`;
+    const i = lines.findIndex((l) => l.startsWith(`${k}=`));
+    if (i >= 0) lines[i] = line; else lines.push(line);
+  }
+  writeFileSync(path, lines.filter((l, i) => l !== "" || i < lines.length - 1).join("\n"), { mode: 0o600 });
+}
+/** Some consumers read keys from their own config files, not the environment.
+ * Propagate on save so ONE paste updates the whole stack. Best-effort: failures
+ * are reported but never block the vault save. */
+function propagateKey(providerId, key) {
+  const notes = [];
+  const provider = PROVIDERS.find((p) => p.id === providerId);
+  const envNames = provider ? [provider.env, ...(provider.envAliases || [])] : [];
+  // .env.local consumers (CURSEM IDE + Floyd Desktop read these at boot).
+  const envFiles = [
+    join(SURFACES, "ide", ".env.local"),
+    join(SURFACES, "desktop", ".env.local"),
+  ];
+  for (const file of envFiles) {
+    try {
+      upsertEnvFile(file, Object.fromEntries(envNames.map((n) => [n, key])));
+      notes.push(`${file.split("/surfaces/")[1]} updated`);
+    } catch (err) {
+      notes.push(`${file}: ${String(err?.message ?? err).slice(0, 60)}`);
+    }
+  }
+  if (providerId === "zai") {
+    // Floyd Core validates provider.zai-coding-plan.options.apiKey from the
+    // user's opencode config at startup (fail-closed).
+    const cfgPath = join(process.env.HOME, ".config/opencode/opencode.json");
+    try {
+      const cfg = JSON.parse(readFileSync(cfgPath, "utf8"));
+      cfg.provider ??= {};
+      cfg.provider["zai-coding-plan"] ??= {};
+      cfg.provider["zai-coding-plan"].options ??= {};
+      cfg.provider["zai-coding-plan"].options.apiKey = key;
+      writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
+      notes.push("opencode config updated — restart Floyd Core to pick it up");
+    } catch (err) {
+      notes.push(`opencode config not updated: ${String(err?.message ?? err).slice(0, 80)}`);
+    }
+  }
+  return notes;
+}
+/** Vendor auto-detection from key shape. Returns {match} on a unique prefix hit,
+ * {candidates} when the shape fits several vendors (e.g. bare "sk-"). */
+function detectProvider(key) {
+  const exact = PROVIDERS.filter((p) => p.prefixes.some((x) => key.startsWith(x)));
+  if (exact.length === 1) return { match: exact[0] };
+  const loose = PROVIDERS.filter((p) => (p.ambiguous || []).some((x) => key.startsWith(x)));
+  if (exact.length === 0 && loose.length === 1) return { match: loose[0] };
+  const candidates = [...new Set([...exact, ...loose])];
+  return { candidates: candidates.length ? candidates : PROVIDERS };
+}
+async function testProviderKey(provider, key, endpointOverride) {
+  if (!provider.test) return { tested: false, note: "no live test for this vendor" };
+  const spec = provider.test(key);
+  // A custom endpoint replaces the URL's origin+path root while keeping the
+  // vendor-specific auth headers and request shape.
+  const url = endpointOverride ? spec.url.replace(defaultEndpoint(provider), endpointOverride) : spec.url;
+  try {
+    const res = await fetch(url, {
+      method: spec.method || "GET",
+      headers: spec.headers || {},
+      body: spec.body,
+      signal: AbortSignal.timeout(10000),
+    });
+    if (res.ok) return { tested: true, valid: true, endpoint: url };
+    return { tested: true, valid: false, status: res.status, endpoint: url, note: res.status === 401 || res.status === 403 ? "rejected by vendor (bad or expired key)" : `vendor answered HTTP ${res.status}` };
+  } catch (err) {
+    return { tested: false, endpoint: url, note: `could not reach vendor: ${String(err?.message ?? err).slice(0, 120)}` };
+  }
+}
+/** The endpoint root a provider talks to (origin + base path, no method-specific
+ * suffix). Derived from the test URL so display and override share one truth. */
+function defaultEndpoint(provider) {
+  if (!provider.test) return null;
+  const u = new URL(provider.test("x").url);
+  // strip the terminal resource segment (/models, /chat/completions, /user, …)
+  return `${u.origin}${u.pathname.replace(/\/(models|chat\/completions|user|whoami-v2|health)$/, "")}`;
+}
+
 const MANAGED = {
   "cursem-ide": {
-    port: 13020,
+    port: 13012,
     cwd: join(SURFACES, "ide"),
     cmd: NODE_BIN, args: ["server/cursem-server.mjs"],
     env: {
-      CURSEM_PORT: "13020",
-      // Allow embedding ONLY by the frame's own origins (local + tailnet).
-      CURSEM_FRAME_ANCESTORS: "http://127.0.0.1:13030 http://localhost:13030 http://floyd.localhost:13030 https://douglass-mac-mini.tail58d565.ts.net:8450 https://douglass-mac-mini.tail58d565.ts.net:10041",
+      CURSEM_PORT: "13012",
+      // Allow embedding ONLY by local frame origins. Remote access is disabled
+      // until a private overlay is configured.
+      CURSEM_FRAME_ANCESTORS: "http://127.0.0.1:13030 http://localhost:13030 http://floyd.localhost:13030",
     },
   },
   "floyd-desktop": {
-    port: 13021,
+    port: 13010,
     cwd: join(SURFACES, "desktop"),
     cmd: NODE_BIN, args: ["dist-server/index.js"],
-    env: { PORT: "13021" },
+    env: { PORT: "13010" },
   },
   "harness-launcher": {
-    port: 11000,
+    port: 13014,
     cwd: join(SURFACES, "launcher"),
     cmd: NODE_BIN, args: ["src/server.js"],
-    env: { PORT: "11000", HOST: "127.0.0.1" },
+    env: { PORT: "13014", HOST: "127.0.0.1" },
   },
   "floyd-code-cli": {
     port: 13022,
@@ -92,6 +243,10 @@ const MANAGED = {
   },
 };
 
+// Browork is a page inside Floyd Desktop — launching it ensures the same
+// server (ensureApp is idempotent: it checks the port before spawning).
+MANAGED["browork"] = MANAGED["floyd-desktop"];
+
 const children = new Map(); // id -> ChildProcess
 
 function portOpen(port) {
@@ -109,7 +264,7 @@ async function ensureApp(id) {
   if (!spec) return { id, managed: false };
   if (await portOpen(spec.port)) return { id, managed: true, up: true, port: spec.port };
   if (!existsSync(spec.cwd)) return { id, managed: true, up: false, error: `missing cwd ${spec.cwd}` };
-  const env = { ...process.env, ...(typeof spec.env === "function" ? spec.env() : spec.env) };
+  const env = { ...process.env, ...vaultEnv(), ...(typeof spec.env === "function" ? spec.env() : spec.env) };
   const child = spawn(spec.cmd, spec.args, { cwd: spec.cwd, env, stdio: ["ignore", "pipe", "pipe"], detached: false });
   children.set(id, child);
   child.stdout.on("data", (d) => process.stdout.write(`[${id}] ${d}`));
@@ -360,6 +515,95 @@ const server = http.createServer(async (req, res) => {
       const argv = build(q);
       if (!argv) return json(res, 400, { ok: false, error: `invalid arguments for ${op}` });
       return json(res, 200, await chronoRun(repo, argv));
+    }
+    // ---- provider key vault API ----
+    // GET  /api/keys                 -> providers + masked stored keys (never raw)
+    // POST /api/keys/detect          -> {key} -> vendor auto-detect from shape
+    // POST /api/keys/:provider       -> {key} -> live-test then save
+    // DELETE /api/keys/:provider     -> remove
+    if (path === "/api/keys" && req.method === "GET") {
+      const vault = readVault();
+      // ChatGPT subscription (OAuth) — credential REFERENCE only. The durable
+      // token store is ~/.codex/auth.json (Codex-owned, auto-refreshed). Raw
+      // tokens are never copied into the vault or returned by this API.
+      let chatgptSubscription = { configured: false, authFile: join(homedir(), ".codex", "auth.json"), accountId: null };
+      try {
+        const auth = JSON.parse(readFileSync(chatgptSubscription.authFile, "utf8"));
+        if (auth?.tokens?.access_token && auth?.tokens?.refresh_token) {
+          chatgptSubscription = {
+            configured: true,
+            authFile: chatgptSubscription.authFile,
+            accountId: auth.tokens.account_id ? `${String(auth.tokens.account_id).slice(0, 8)}…` : null,
+          };
+        }
+      } catch { /* not signed in */ }
+      return json(res, 200, {
+        chatgptSubscription,
+        providers: PROVIDERS.map((p) => ({
+          id: p.id, name: p.name, env: p.env, envAliases: p.envAliases || [], url: p.url, testable: Boolean(p.test),
+          endpoint: vault[p.id]?.endpoint || defaultEndpoint(p),
+          defaultEndpoint: defaultEndpoint(p),
+          customEndpoint: Boolean(vault[p.id]?.endpoint),
+          configured: Boolean(vault[p.id]?.key),
+          masked: vault[p.id]?.key ? maskKey(vault[p.id].key) : null,
+          verified: vault[p.id]?.verified ?? null,
+          savedAt: vault[p.id]?.savedAt ?? null,
+        })),
+      });
+    }
+    if (path === "/api/keys/detect" && req.method === "POST") {
+      let body = ""; for await (const c of req) body += c;
+      const key = (JSON.parse(body || "{}").key || "").trim();
+      if (!key) return json(res, 400, { error: "empty key" });
+      const d = detectProvider(key);
+      return json(res, 200, d.match
+        ? { match: { id: d.match.id, name: d.match.name } }
+        : { candidates: d.candidates.map((p) => ({ id: p.id, name: p.name })) });
+    }
+    // PUT /api/keys/:provider/endpoint -> {endpoint} -> set/reset custom endpoint (re-tests stored key)
+    if (path.startsWith("/api/keys/") && path.endsWith("/endpoint") && req.method === "PUT") {
+      const id = decodeURIComponent(path.slice("/api/keys/".length, -"/endpoint".length));
+      const provider = PROVIDERS.find((p) => p.id === id);
+      if (!provider) return json(res, 404, { error: `unknown provider ${id}` });
+      let body = ""; for await (const c of req) body += c;
+      let endpoint = (JSON.parse(body || "{}").endpoint || "").trim().replace(/\/+$/, "");
+      if (endpoint && !/^https?:\/\/[\w.-]+(:\d+)?(\/[\w./-]*)?$/.test(endpoint)) return json(res, 400, { error: "endpoint must be a plain http(s) URL" });
+      if (endpoint === defaultEndpoint(provider)) endpoint = ""; // resetting to default clears the override
+      const vault = readVault();
+      const entry = vault[id] || {};
+      if (endpoint) entry.endpoint = endpoint; else delete entry.endpoint;
+      let check = null;
+      if (entry.key) {
+        check = await testProviderKey(provider, entry.key, endpoint || undefined);
+        entry.verified = check.tested ? check.valid === true : null;
+      }
+      vault[id] = entry;
+      writeVault(vault);
+      return json(res, 200, { provider: id, endpoint: endpoint || defaultEndpoint(provider), custom: Boolean(endpoint), check });
+    }
+    if (path.startsWith("/api/keys/") && req.method === "POST") {
+      const id = decodeURIComponent(path.slice("/api/keys/".length));
+      const provider = PROVIDERS.find((p) => p.id === id);
+      if (!provider) return json(res, 404, { error: `unknown provider ${id}` });
+      let body = ""; for await (const c of req) body += c;
+      const key = (JSON.parse(body || "{}").key || "").trim();
+      if (!key || key.length < 8 || /\s/.test(key)) return json(res, 400, { error: "that does not look like an API key" });
+      const vault = readVault();
+      const endpointOverride = vault[id]?.endpoint;
+      const check = await testProviderKey(provider, key, endpointOverride);
+      if (check.tested && check.valid === false) return json(res, 400, { error: `${provider.name} ${check.note}`, check });
+      vault[id] = { ...(vault[id] || {}), key, savedAt: new Date().toISOString(), verified: check.tested ? true : null };
+      writeVault(vault);
+      const propagated = propagateKey(id, key);
+      return json(res, 200, { saved: true, provider: id, masked: maskKey(key), check, propagated });
+    }
+    if (path.startsWith("/api/keys/") && req.method === "DELETE") {
+      const id = decodeURIComponent(path.slice("/api/keys/".length));
+      const vault = readVault();
+      if (!vault[id]) return json(res, 404, { error: "no key stored" });
+      delete vault[id];
+      writeVault(vault);
+      return json(res, 200, { removed: id });
     }
     if (path === "/api/action/open-chrome" && req.method === "POST") {
       let body = ""; for await (const c of req) body += c;

@@ -585,3 +585,34 @@ External research sources reviewed as data:
 - Automated and live readiness are green; physical reboot survival and a fresh
   rendered walkthrough are not. The browser-control inventory was empty, so
   prior visual receipts remain historical evidence only.
+
+## Desktop agent ownership + ChatGPT subscription auth — 2026-07-23
+
+- The Floyd Desktop surface (`intake/surfaces/desktop`) owns the singular chat
+  agent: chat endpoints (`/api/chat`, `/api/chat/stream`), 41 built-in
+  Desktop-Commander-compatible tools (`server/mcp-client.ts` BUILTIN_TOOLS,
+  executed by `server/tool-executor.ts`), Browork sub-agent dispatch
+  (`server/browork-manager.ts`, UI-panel-only today), skills, and projects.
+  The frontend calls `/api/chat/stream` via `src/hooks/useApi.ts`.
+- Root cause of "non-responsive agent": the Desktop server was down (frame
+  showed `floyd-desktop up:false`) and its stored Z.AI key returned 401.
+  Both were fixed live; PONG round-trip now passes. The coding-plan key is
+  ruled out for this use case by operator decision.
+- The Frame owns the provider key Vault at
+  `/Volumes/Storage/FLOYD_RUNTIME/secrets/provider-keys.json` (0600), API
+  `/api/keys*`, env-injected into managed apps at launch and propagated to
+  Desktop/IDE `.env.local`. Vault currently holds verified openai, deepseek,
+  zai keys; anthropic is usage-capped until 2026-08-01.
+- Operator decision: the Desktop LLM capability runs on the ChatGPT monthly
+  subscription via OAuth (Codex-style), not metered API keys. Live proof:
+  `~/.codex/auth.json` tokens (valid until ~2026-08-03, auto-refreshable)
+  successfully served text (PONG), vision (blue-image identification), and
+  function calling against `https://chatgpt.com/backend-api/codex/responses`
+  with headers Authorization Bearer + chatgpt-account-id + originator
+  codex_cli_rs. Models on this path: gpt-5.5, gpt-5.4, gpt-5.4-mini,
+  gpt-5.3-codex (subscription credit billing, 5-hour rolling windows).
+- Refresh flow: Codex CLI refreshes via stored refresh_token; single durable
+  token file is `~/.codex/auth.json`. To avoid dual-refresh races the vault
+  stores a credential REFERENCE (auth file path + account id), consistent
+  with core's allowed credential-ref schemes; raw tokens are never copied
+  into the vault or returned by the API.

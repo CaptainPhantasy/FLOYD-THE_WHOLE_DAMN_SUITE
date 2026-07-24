@@ -41,6 +41,16 @@
       "remote_port": 8455
     },
     {
+      "id": "browork",
+      "name": "BROWORK",
+      "subtitle": "Sub-agents · Multi-agent · Dispatch",
+      "kind": "url",
+      "target": "http://127.0.0.1:13021/?browork=1",
+      "health": "http://127.0.0.1:13021/",
+      "accent": "#22d3ee",
+      "remote_port": 8452
+    },
+    {
       "id": "harness-launcher",
       "name": "FLOYD HARNESS LAUNCHER",
       "subtitle": "CI/CD · Pipelines · Deploy",

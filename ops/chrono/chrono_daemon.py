@@ -36,9 +36,9 @@ AUTOSAVE_PREFIX = "chrono: autosave"
 
 # app id -> (port, git repo dir for autosave)
 APPS: dict[str, tuple[int, str]] = {
-    "cursem-ide": (13020, os.path.join(SURFACES, "ide")),
-    "floyd-desktop": (13021, os.path.join(SURFACES, "desktop")),
-    "harness-launcher": (11000, os.path.join(SURFACES, "launcher")),
+    "cursem-ide": (13012, os.path.join(SURFACES, "ide")),
+    "floyd-desktop": (13010, os.path.join(SURFACES, "desktop")),
+    "harness-launcher": (13014, os.path.join(SURFACES, "launcher")),
     "floyd-code-cli": (13022, os.path.join(SURFACES, "pty")),
     "ohmyfloyd": (13023, os.path.join(SURFACES, "pty")),
     "terminalone": (13013, os.path.join(SURFACES, "pty")),
